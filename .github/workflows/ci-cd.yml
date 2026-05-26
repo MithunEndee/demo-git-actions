@@ -1,0 +1,116 @@
+name: Python CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run unit tests
+      run: |
+        python -m pytest test_app.py -v --cov=app --cov-report=term-missing
+    
+    - name: Run linting
+      run: |
+        pip install flake8
+        flake8 app.py --max-line-length=100 --ignore=E402,W503
+  
+  build:
+    name: Build Application
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Create distribution
+      run: |
+        mkdir -p dist
+        cp app.py dist/
+        cp requirements.txt dist/
+        echo "Build completed successfully"
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-app
+        path: dist/
+  
+  deploy-staging:
+    name: Deploy to Staging
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    
+    steps:
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: python-app
+    
+    - name: Deploy to Staging
+      run: |
+        echo "Deploying to staging environment..."
+        echo "This is where you'd deploy to your staging server"
+        # Example: rsync, scp, or cloud deployment commands
+        ls -la
+  
+  deploy-production:
+    name: Deploy to Production
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: python-app
+    
+    - name: Deploy to Production
+      run: |
+        echo "Deploying to production environment..."
+        echo "This is where you'd deploy to your production server"
+        # Example deployment commands:
+        # - Deploy to AWS: aws s3 sync
+        # - Deploy to Heroku: git push heroku main
+        # - Deploy to Docker: docker build and push
+        ls -la

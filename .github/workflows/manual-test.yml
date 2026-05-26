@@ -1,0 +1,15 @@
+name: Manual Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: 'Test Message'
+        required: true
+        default: 'Hello World!!!'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ inputs.message }}"
