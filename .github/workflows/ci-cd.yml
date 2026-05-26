@@ -69,7 +69,7 @@ jobs:
         echo "Build completed successfully"
     
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: python-app
         path: dist/
@@ -82,7 +82,7 @@ jobs:
     
     steps:
     - name: Download artifact
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: python-app
     
@@ -101,7 +101,7 @@ jobs:
     
     steps:
     - name: Download artifact
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: python-app
     
