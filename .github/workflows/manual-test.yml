@@ -13,4 +13,3 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "${{ inputs.message }}"
-
