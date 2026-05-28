@@ -24,21 +24,13 @@ on:
   workflow_dispatch:
     inputs:
       token:
-        description: >
-          [OPTIONAL] API token for Endee Serverless (Scale plan).
-          Leave blank to run in OSS mode — a local Endee Docker container
-          will be started automatically and all tests will run against it.
-          Provide a token to run against Endee Serverless instead.
+        description: "[OPTIONAL] Endee Serverless API token. Leave blank to run in OSS mode (local Docker)."
         required: false
         default: ""
         type: string
 
       base_url:
-        description: >
-          [OPTIONAL] Override the API base URL (e.g. http://0.0.0.0:8081/api/v1).
-          Leave blank — the URL is derived from the token in Serverless mode,
-          and defaults to http://127.0.0.1:8080/api/v1 in OSS mode.
-          Only set this if the server is running on a non-default host or port.
+        description: "[OPTIONAL] API base URL override (e.g. http://0.0.0.0:8081/api/v1). Leave blank to use the mode default."
         required: false
         default: ""
         type: string
