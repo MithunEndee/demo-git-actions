@@ -8,7 +8,6 @@ Pytest fixtures should NOT be writtn here - those belong in conftest.py.
 """
 
 import uuid
-
 import numpy as np
 
 # === Test-wide constants ===
@@ -88,7 +87,7 @@ def make_item(i: int, dim: int = DIM, with_sparse: bool = False) -> dict:
 
 
 def safe_delete(client, name: str) -> None:
-    """Delete an index silently – used in fixture teardown."""
+    """Delete an index silently - used in fixture teardown."""
     try:
         client.delete_index(name)
     except Exception:

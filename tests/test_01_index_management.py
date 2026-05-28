@@ -2,7 +2,7 @@
 test_01_index_management.py
 
 Tests for index lifecycle:
-  - create_index  (all precision × space_type combinations, custom HNSW params,
+  - create_index  (all precision and space_type combinations, custom HNSW params,
                    hybrid indexes, duplicate detection)
   - list_indexes
   - get_index     (attribute verification)
@@ -17,7 +17,7 @@ from endee import Endee, Precision
 from helpers import DIM, HYBRID_DIM, get_index_names, safe_delete, uid
 
 
-# === Parametrised: all precision types × all space types ===
+# === Parametrised: all precision types and all space types ===
 
 ALL_PRECISIONS = [
     Precision.FLOAT32,

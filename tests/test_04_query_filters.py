@@ -11,7 +11,7 @@ Tests for filtered queries:
   - Both tuning params together
 
 Filter layout in populated_index (N=50 vectors):
-  category : "A"|"B"|"C"  (i%3)
+  category : "A"|"B"|"C"   (i%3)
   priority : 0-4           (i%5)
   score    : 0-49          (i itself)
   tags     : "important"|"normal"  (even/odd i)

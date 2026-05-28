@@ -1,8 +1,8 @@
 """
 test_03_query_basic.py
 
-Tests for query – basic parameters and result structure:
-  - Result shape (required keys present)
+Tests for query - basic parameters and result structure:
+  - Result shape
   - top_k variations
   - ef (search quality) variations
   - include_vectors flag
@@ -87,7 +87,7 @@ def test_query_norm_positive(populated_index):
 
 # === top_k variations ===
 
-@pytest.mark.parametrize("top_k", [1, 5, 10, 20, 50])
+@pytest.mark.parametrize("top_k", [1, 5, 10, 20, 30, 50])
 def test_query_top_k_returns_at_most_k_results(populated_index, top_k):
     """query must return no more than top_k results."""
     _, index = populated_index

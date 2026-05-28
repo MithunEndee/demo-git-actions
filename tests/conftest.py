@@ -2,12 +2,11 @@
 Shared pytest fixtures for Endee integration tests.
 
 Environment variables:
-  ENDEE_TOKEN    – API token (omit for OSS/local mode)
-  ENDEE_BASE_URL – Override base URL (e.g. http://0.0.0.0:8081/api/v1)
+  ENDEE_TOKEN    - API token (omit for OSS/local mode)
+  ENDEE_BASE_URL - Override base URL (e.g. http://0.0.0.0:8080/api/v1)
 """
 
 import os
-
 import pytest
 
 from endee import Endee, Precision

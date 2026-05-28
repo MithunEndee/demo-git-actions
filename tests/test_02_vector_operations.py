@@ -227,7 +227,7 @@ def test_delete_vector_not_in_query_results(populated_index):
     """Deleted vector should not appear in top-50 results."""
     _, index = populated_index
     target_id = "vec_0042"
-    query_vec = dense_vec(seed=42)  # arbitrary query
+    query_vec = dense_vec(seed=42)
 
     index.delete_vector(target_id)
     results = index.query(vector=query_vec, top_k=N_VECTORS)
