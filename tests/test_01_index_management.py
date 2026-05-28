@@ -17,7 +17,7 @@ from endee import Endee, Precision
 from helpers import DIM, HYBRID_DIM, get_index_names, safe_delete, uid
 
 
-# ── Parametrised: all precision types × all space types ──────────────────
+# === Parametrised: all precision types × all space types ===
 
 ALL_PRECISIONS = [
     Precision.FLOAT32,
@@ -51,7 +51,7 @@ def test_create_index_precision_space_combinations(client, precision, space_type
         safe_delete(client, name)
 
 
-# ── Custom HNSW parameters ────────────────────────────────────────────────
+# === Custom HNSW parameters ===
 
 @pytest.mark.parametrize("M,ef_con", [
     (4,   32),
@@ -80,10 +80,11 @@ def test_create_index_custom_hnsw_params(client, M, ef_con):
         safe_delete(client, name)
 
 
-# ── Various dimensions ────────────────────────────────────────────────────
+# === Various dimensions ===
 
 @pytest.mark.parametrize("dimension", [2, 8, 64, 128, 512])
 def test_create_index_various_dimensions(client, dimension):
+    """Index creation with a range of valid dimension values."""
     name = uid("dim")
     try:
         client.create_index(
@@ -98,9 +99,10 @@ def test_create_index_various_dimensions(client, dimension):
         safe_delete(client, name)
 
 
-# ── Hybrid index creation ─────────────────────────────────────────────────
+# === Hybrid index creation ===
 
 def test_create_hybrid_index_default_sparse(client):
+    """Hybrid index with the default sparse model must report is_hybrid True."""
     name = uid("hyb")
     try:
         client.create_index(
@@ -136,14 +138,16 @@ def test_create_hybrid_index_bm25(client):
         safe_delete(client, name)
 
 
-# ── list_indexes ──────────────────────────────────────────────────────────
+# === list_indexes ===
 
 def test_list_indexes_returns_list(client):
+    """list_indexes must return a list."""
     names = get_index_names(client)
     assert isinstance(names, list)
 
 
 def test_list_indexes_contains_created_index(client):
+    """A newly created index must appear in list_indexes."""
     name = uid("list")
     try:
         client.create_index(name=name, dimension=DIM, space_type="cosine", precision=Precision.INT8)
@@ -154,6 +158,7 @@ def test_list_indexes_contains_created_index(client):
 
 
 def test_list_indexes_does_not_contain_deleted_index(client):
+    """A deleted index must not appear in list_indexes."""
     name = uid("del")
     client.create_index(name=name, dimension=DIM, space_type="cosine", precision=Precision.INT8)
     client.delete_index(name)
@@ -161,9 +166,10 @@ def test_list_indexes_does_not_contain_deleted_index(client):
     assert name not in names
 
 
-# ── get_index – attribute verification ───────────────────────────────────
+# === get_index – attribute verification ===
 
 def test_get_index_attributes_match_creation(client):
+    """get_index must return an object whose attributes match the creation parameters."""
     name = uid("attrs")
     M, ef_con = 24, 200
     try:
@@ -186,9 +192,10 @@ def test_get_index_attributes_match_creation(client):
         safe_delete(client, name)
 
 
-# ── describe() ────────────────────────────────────────────────────────────
+# === describe() ===
 
 def test_describe_returns_expected_keys(empty_index):
+    """describe() must return a dict containing all expected metadata keys."""
     _, index = empty_index
     info = index.describe()
     expected_keys = {"name", "space_type", "dimension", "sparse_model",
@@ -197,6 +204,7 @@ def test_describe_returns_expected_keys(empty_index):
 
 
 def test_describe_values_match_creation(client):
+    """describe() values must match the parameters passed at creation time."""
     name = uid("desc")
     try:
         client.create_index(
@@ -219,9 +227,10 @@ def test_describe_values_match_creation(client):
         safe_delete(client, name)
 
 
-# ── delete_index ──────────────────────────────────────────────────────────
+# === delete_index ===
 
 def test_delete_index_returns_success_message(client):
+    """delete_index must return a message that includes the index name."""
     name = uid("delok")
     client.create_index(name=name, dimension=DIM, space_type="cosine", precision=Precision.INT8)
     result = client.delete_index(name)
@@ -229,6 +238,7 @@ def test_delete_index_returns_success_message(client):
 
 
 def test_delete_index_removes_from_list(client):
+    """Deleting an index must remove it from list_indexes."""
     name = uid("delist")
     client.create_index(name=name, dimension=DIM, space_type="cosine", precision=Precision.INT8)
     client.delete_index(name)

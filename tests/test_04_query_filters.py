@@ -33,9 +33,10 @@ from helpers import N_VECTORS, dense_vec
 _BF = 1_000_000
 
 
-# ── $eq operator ──────────────────────────────────────────────────────────
+# === $eq operator ===
 
 def test_filter_eq_all_results_match(populated_index):
+    """All results from a $eq filter must have the expected field value."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -49,6 +50,7 @@ def test_filter_eq_all_results_match(populated_index):
 
 
 def test_filter_eq_exact_count(populated_index):
+    """$eq filter on category 'B' must return exactly 17 results."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -60,6 +62,7 @@ def test_filter_eq_exact_count(populated_index):
 
 
 def test_filter_eq_tags_important(populated_index):
+    """$eq filter on tags='important' must return exactly 25 results, all matching."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -73,6 +76,7 @@ def test_filter_eq_tags_important(populated_index):
 
 
 def test_filter_eq_tags_normal(populated_index):
+    """$eq filter on tags='normal' must return exactly 25 results, all matching."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -86,6 +90,7 @@ def test_filter_eq_tags_normal(populated_index):
 
 
 def test_filter_eq_no_match_returns_empty(populated_index):
+    """$eq filter with a value that matches no vectors must return an empty list."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -96,9 +101,10 @@ def test_filter_eq_no_match_returns_empty(populated_index):
     assert len(results) == 0
 
 
-# ── $in operator ──────────────────────────────────────────────────────────
+# === $in operator ===
 
 def test_filter_in_single_value(populated_index):
+    """$in filter with a single value must behave like $eq for that value."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -112,6 +118,7 @@ def test_filter_in_single_value(populated_index):
 
 
 def test_filter_in_two_values(populated_index):
+    """$in filter with two values must return results matching either value."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -137,6 +144,7 @@ def test_filter_in_all_values(populated_index):
 
 
 def test_filter_in_tags(populated_index):
+    """$in filter covering all tag values must return all vectors."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -147,9 +155,10 @@ def test_filter_in_tags(populated_index):
     assert len(results) == N_VECTORS
 
 
-# ── $range operator ───────────────────────────────────────────────────────
+# === $range operator ===
 
 def test_filter_range_returns_correct_count(populated_index):
+    """$range filter must return the expected number of matching vectors."""
     _, index = populated_index
     # score in [10, 20] → i = 10..20 → 11 vectors
     results = index.query(
@@ -162,6 +171,7 @@ def test_filter_range_returns_correct_count(populated_index):
 
 
 def test_filter_range_all_results_within_bounds(populated_index):
+    """All results from a $range filter must have scores within the specified bounds."""
     _, index = populated_index
     lo, hi = 5, 15
     results = index.query(
@@ -188,6 +198,7 @@ def test_filter_range_full_span(populated_index):
 
 
 def test_filter_range_narrow(populated_index):
+    """$range filter with identical bounds must return exactly one matching vector."""
     _, index = populated_index
     # score in [25, 25] → only vec_0025
     results = index.query(
@@ -200,7 +211,7 @@ def test_filter_range_narrow(populated_index):
     assert results[0]["id"] == "vec_0025"
 
 
-# ── Combined filters (AND logic) ──────────────────────────────────────────
+# === Combined filters (AND logic) ===
 
 def test_filter_and_eq_and_eq(populated_index):
     """category='A' AND tags='important' → 9 vectors (i=0,6,12,18,24,30,36,42,48)."""
@@ -278,10 +289,11 @@ def test_filter_three_conditions(populated_index):
         assert r["filter"]["score"] <= 29
 
 
-# ── filter_boost_percentage ───────────────────────────────────────────────
+# === filter_boost_percentage ===
 
 @pytest.mark.parametrize("boost", [0, 10, 25, 50, 100, 200, 400])
 def test_filter_boost_percentage_accepted(populated_index, boost):
+    """query must accept filter_boost_percentage values across the valid range."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -293,6 +305,7 @@ def test_filter_boost_percentage_accepted(populated_index, boost):
 
 
 def test_filter_boost_results_still_satisfy_filter(populated_index):
+    """Results returned with filter_boost_percentage must still satisfy the filter."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -305,10 +318,11 @@ def test_filter_boost_results_still_satisfy_filter(populated_index):
         assert r["filter"]["tags"] == "important"
 
 
-# ── prefilter_cardinality_threshold ──────────────────────────────────────
+# === prefilter_cardinality_threshold ===
 
 @pytest.mark.parametrize("threshold", [1_000, 5_000, 10_000, 100_000, 1_000_000])
 def test_prefilter_threshold_accepted(populated_index, threshold):
+    """query must accept prefilter_cardinality_threshold values across the valid range."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -320,6 +334,7 @@ def test_prefilter_threshold_accepted(populated_index, threshold):
 
 
 def test_prefilter_threshold_results_satisfy_filter(populated_index):
+    """Results returned with a low prefilter threshold must still satisfy the filter."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -331,9 +346,10 @@ def test_prefilter_threshold_results_satisfy_filter(populated_index):
         assert r["filter"]["category"] == "B"
 
 
-# ── Both tuning params together ───────────────────────────────────────────
+# === Both tuning params together ===
 
 def test_filter_both_tuning_params_together(populated_index):
+    """Supplying both filter_boost_percentage and prefilter_cardinality_threshold together must work correctly."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),

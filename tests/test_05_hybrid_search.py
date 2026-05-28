@@ -18,9 +18,10 @@ import pytest
 from helpers import HYBRID_DIM, N_VECTORS, SPARSE_DIM, dense_vec, sparse_vec
 
 
-# ── Upsert ────────────────────────────────────────────────────────────────
+# === Upsert ===
 
 def test_hybrid_upsert_succeeds(empty_hybrid_index):
+    """Upserting a single hybrid vector must return a success response."""
     _, index = empty_hybrid_index
     si, sv = sparse_vec(seed=0)
     result = index.upsert([{
@@ -33,6 +34,7 @@ def test_hybrid_upsert_succeeds(empty_hybrid_index):
 
 
 def test_hybrid_upsert_with_meta_and_filter(empty_hybrid_index):
+    """Upserting a hybrid vector with meta and filter fields must succeed."""
     _, index = empty_hybrid_index
     si, sv = sparse_vec(seed=1)
     result = index.upsert([{
@@ -47,6 +49,7 @@ def test_hybrid_upsert_with_meta_and_filter(empty_hybrid_index):
 
 
 def test_hybrid_upsert_batch(empty_hybrid_index):
+    """Upserting a batch of hybrid vectors must return a success response."""
     _, index = empty_hybrid_index
     from helpers import make_item
     batch = [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(20)]
@@ -54,7 +57,7 @@ def test_hybrid_upsert_batch(empty_hybrid_index):
     assert "success" in result.lower()
 
 
-# ── Dense-only query on hybrid index ─────────────────────────────────────
+# === Dense-only query on hybrid index ===
 
 def test_hybrid_dense_only_query(populated_hybrid_index):
     """Hybrid index accepts a query with only dense vector (no sparse)."""
@@ -65,6 +68,7 @@ def test_hybrid_dense_only_query(populated_hybrid_index):
 
 
 def test_hybrid_dense_only_result_structure(populated_hybrid_index):
+    """Dense-only query on a hybrid index must return results with all required keys."""
     _, index = populated_hybrid_index
     results = index.query(vector=dense_vec(HYBRID_DIM), top_k=1)
     r = results[0]
@@ -72,7 +76,7 @@ def test_hybrid_dense_only_result_structure(populated_hybrid_index):
         assert key in r
 
 
-# ── Sparse-only query on hybrid index ────────────────────────────────────
+# === Sparse-only query on hybrid index ===
 
 def test_hybrid_sparse_only_query(populated_hybrid_index):
     """Query with only sparse_indices/values, no dense vector."""
@@ -83,9 +87,10 @@ def test_hybrid_sparse_only_query(populated_hybrid_index):
     assert len(results) > 0
 
 
-# ── Full hybrid query ─────────────────────────────────────────────────────
+# === Full hybrid query ===
 
 def test_hybrid_full_query(populated_hybrid_index):
+    """Full hybrid query with both dense and sparse inputs must return results."""
     _, index = populated_hybrid_index
     si, sv = sparse_vec(seed=42)
     results = index.query(
@@ -99,6 +104,7 @@ def test_hybrid_full_query(populated_hybrid_index):
 
 
 def test_hybrid_query_results_ordered_by_similarity(populated_hybrid_index):
+    """Hybrid query results must be sorted from highest to lowest similarity."""
     _, index = populated_hybrid_index
     si, sv = sparse_vec(seed=7)
     results = index.query(
@@ -111,9 +117,10 @@ def test_hybrid_query_results_ordered_by_similarity(populated_hybrid_index):
     assert sims == sorted(sims, reverse=True)
 
 
-# ── Hybrid query with filter ──────────────────────────────────────────────
+# === Hybrid query with filter ===
 
 def test_hybrid_query_with_eq_filter(populated_hybrid_index):
+    """Hybrid query with a $eq filter must return only matching vectors."""
     _, index = populated_hybrid_index
     si, sv = sparse_vec(seed=3)
     results = index.query(
@@ -130,6 +137,7 @@ def test_hybrid_query_with_eq_filter(populated_hybrid_index):
 
 
 def test_hybrid_query_with_range_filter(populated_hybrid_index):
+    """Hybrid query with a $range filter must return only vectors within the score range."""
     _, index = populated_hybrid_index
     si, sv = sparse_vec(seed=4)
     results = index.query(
@@ -145,7 +153,7 @@ def test_hybrid_query_with_range_filter(populated_hybrid_index):
         assert 10 <= r["filter"]["score"] <= 20
 
 
-# ── RRF weight variations ─────────────────────────────────────────────────
+# === RRF weight variations ===
 
 @pytest.mark.parametrize("weight", [0.0, 0.2, 0.5, 0.7, 1.0])
 def test_hybrid_rrf_weight_accepted(populated_hybrid_index, weight):
@@ -190,10 +198,11 @@ def test_hybrid_rrf_weight_1_emphasises_dense(populated_hybrid_index):
     assert len(results) > 0
 
 
-# ── rrf_rank_constant variations ─────────────────────────────────────────
+# === rrf_rank_constant variations ===
 
 @pytest.mark.parametrize("rrc", [1, 10, 30, 60, 120, 200])
 def test_hybrid_rrf_rank_constant_accepted(populated_hybrid_index, rrc):
+    """All valid rrf_rank_constant values must be accepted without error."""
     _, index = populated_hybrid_index
     si, sv = sparse_vec(seed=20)
     results = index.query(
@@ -206,9 +215,10 @@ def test_hybrid_rrf_rank_constant_accepted(populated_hybrid_index, rrc):
     assert isinstance(results, list)
 
 
-# ── include_vectors on hybrid index ──────────────────────────────────────
+# === include_vectors on hybrid index ===
 
 def test_hybrid_include_vectors_true(populated_hybrid_index):
+    """include_vectors=True on a hybrid index must return full-dimension dense vectors."""
     _, index = populated_hybrid_index
     si, sv = sparse_vec(seed=30)
     results = index.query(
@@ -224,6 +234,7 @@ def test_hybrid_include_vectors_true(populated_hybrid_index):
 
 
 def test_hybrid_include_vectors_false(populated_hybrid_index):
+    """include_vectors=False on a hybrid index must return empty vector lists."""
     _, index = populated_hybrid_index
     si, sv = sparse_vec(seed=31)
     results = index.query(
@@ -237,9 +248,10 @@ def test_hybrid_include_vectors_false(populated_hybrid_index):
         assert r["vector"] == []
 
 
-# ── get_vector on hybrid index returns sparse data ────────────────────────
+# === get_vector on hybrid index returns sparse data ===
 
 def test_hybrid_get_vector_has_sparse_keys(populated_hybrid_index):
+    """get_vector on a hybrid index must include sparse_indices and sparse_values keys."""
     _, index = populated_hybrid_index
     vec = index.get_vector("vec_0000")
     assert "sparse_indices" in vec, "sparse_indices missing from get_vector result"
@@ -247,12 +259,14 @@ def test_hybrid_get_vector_has_sparse_keys(populated_hybrid_index):
 
 
 def test_hybrid_get_vector_sparse_lists_same_length(populated_hybrid_index):
+    """sparse_indices and sparse_values returned by get_vector must have equal length."""
     _, index = populated_hybrid_index
     vec = index.get_vector("vec_0001")
     assert len(vec["sparse_indices"]) == len(vec["sparse_values"])
 
 
 def test_hybrid_get_vector_sparse_indices_are_ints(populated_hybrid_index):
+    """sparse_indices returned by get_vector must all be integers."""
     _, index = populated_hybrid_index
     vec = index.get_vector("vec_0002")
     for idx in vec["sparse_indices"]:
@@ -260,6 +274,7 @@ def test_hybrid_get_vector_sparse_indices_are_ints(populated_hybrid_index):
 
 
 def test_hybrid_get_vector_sparse_values_are_floats(populated_hybrid_index):
+    """sparse_values returned by get_vector must all be floats."""
     _, index = populated_hybrid_index
     vec = index.get_vector("vec_0003")
     for val in vec["sparse_values"]:

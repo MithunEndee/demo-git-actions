@@ -4,14 +4,14 @@ Shared constants and helper functions for integration tests.
 Import this module directly in test files:
     from helpers import DIM, uid, dense_vec, ...
 
-Do NOT put pytest fixtures here – those belong in conftest.py.
+Pytest fixtures should NOT be writtn here - those belong in conftest.py.
 """
 
 import uuid
 
 import numpy as np
 
-# ── Test-wide constants ────────────────────────────────────────────────────
+# === Test-wide constants ===
 DIM = 16          # Dense vector dimension for most tests
 HYBRID_DIM = 16   # Dense dimension for hybrid tests
 SPARSE_DIM = 500  # Vocabulary size for sparse vectors
@@ -19,7 +19,7 @@ SPARSE_NNZ = 8    # Non-zero terms per sparse vector
 N_VECTORS = 50    # Vectors inserted per populated fixture
 
 
-# ── Vector / item generators ──────────────────────────────────────────────
+# === Vector / item generators ===
 
 def uid(prefix: str = "t") -> str:
     """Return a unique index name that fits inside the 48-char limit."""
