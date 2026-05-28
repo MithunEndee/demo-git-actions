@@ -1,9 +1,9 @@
-name: Integration Tests
+name: Functional Tests
 
 # =============================================================================
 # HOW TO USE
 #
-# Trigger manually: GitHub Actions → Integration Tests → Run workflow
+# Trigger manually: GitHub Actions → Functional Tests → Run workflow
 #
 # SERVERLESS MODE  (token provided)
 #   Provide an API token from the Endee Serverless (Scale plan to test all features).
@@ -16,7 +16,7 @@ name: Integration Tests
 #   and starts a local server on port 8080 with authentication disabled.
 #   base_url defaults to http://127.0.0.1:8080/api/v1.
 #   To target an already-running server on another host, set base_url 
-#   (e.g. http://0.0.0.0:8081/api/v1) and leave token empty.
+#   (e.g. http://0.0.0.0:8080/api/v1) and leave token empty.
 #
 # =============================================================================
 
@@ -30,7 +30,7 @@ on:
         type: string
 
       base_url:
-        description: "[OPTIONAL] API base URL override (e.g. http://0.0.0.0:8081/api/v1). Leave blank to use the mode default."
+        description: "[OPTIONAL] API base URL override (e.g. http://0.0.0.0:8080/api/v1). Leave blank to use the mode default."
         required: false
         default: ""
         type: string
@@ -38,8 +38,8 @@ on:
 # =============================================================================
 
 jobs:
-  integration-test:
-    name: Endee Integration Tests
+  functional-test:
+    name: Endee Functional Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -153,10 +153,10 @@ jobs:
               sys.exit(1)
           PYEOF
 
-      # === 7. Run the full integration test suite ===
+      # === 7. Run the full functional test suite ===
       #  --junit-xml  →  machine-readable results used by the summary step
       #  --html       →  downloadable self-contained HTML report (artifact)
-      - name: Run integration tests
+      - name: Run functional tests
         id: pytest
         env:
           ENDEE_TOKEN:    ${{ inputs.token }}
@@ -199,13 +199,12 @@ jobs:
               passed   = total - failures - errors - skipped
               elapsed  = float(suite.get("time",   0))
               bad      = failures + errors
-              status   = "PASSED" if bad == 0 else "FAILED"
 
               mins, secs = divmod(int(elapsed), 60)
               duration = f"{mins}m {secs}s" if mins else f"{secs}s"
 
               lines = [
-                  f"## Integration Test Results — {status}",
+                  f"## Endee - Functional Test Report",
                   "",
                   "| Result  | Count |",
                   "|---------|------:|",
@@ -249,7 +248,7 @@ jobs:
 
           except FileNotFoundError:
               with open(summary_file, "a") as f:
-                  f.write("## Integration Test Results\n\n"
+                  f.write("## Functional Test Results\n\n"
                           "test-results.xml not found — pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
@@ -260,7 +259,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: endee-integration-test-results
+          name: endee-functional-test-results
           path: |
             test-report.html
             test-results.xml

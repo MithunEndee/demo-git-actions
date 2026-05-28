@@ -45,7 +45,7 @@ pytest
 **Override the server URL** (optional)
 
 ```bash
-export ENDEE_BASE_URL=http://0.0.0.0:8081/api/v1
+export ENDEE_BASE_URL=http://0.0.0.0:8080/api/v1
 pytest
 ```
 
