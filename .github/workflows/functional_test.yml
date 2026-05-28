@@ -3,7 +3,7 @@ name: Functional Tests
 # =============================================================================
 # HOW TO USE
 #
-# Trigger manually: GitHub Actions → Functional Tests → Run workflow
+# Trigger manually: GitHub Actions, Functional Tests, Run workflow
 #
 # SERVERLESS MODE  (token provided)
 #   Provide an API token from the Endee Serverless (Scale plan to test all features).
@@ -15,7 +15,7 @@ name: Functional Tests
 #   The workflow pulls the official Docker image (endeeio/endee-server:latest)
 #   and starts a local server on port 8080 with authentication disabled.
 #   base_url defaults to http://127.0.0.1:8080/api/v1.
-#   To target an already-running server on another host, set base_url 
+#   To target an already-running server on another host, set base_url
 #   (e.g. http://0.0.0.0:8080/api/v1) and leave token empty.
 #
 # =============================================================================
@@ -35,15 +35,12 @@ on:
         default: ""
         type: string
 
-# =============================================================================
-
 jobs:
   functional-test:
     name: Endee Functional Tests
     runs-on: ubuntu-latest
 
     steps:
-      # === 1. Detect run mode ===
       - name: Detect run mode
         id: mode
         run: |
@@ -55,11 +52,10 @@ jobs:
             echo "Serverless mode: will connect to Endee Serverless with provided token"
           fi
 
-      # === 2. Checkout repository ===
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # === 3. OSS: start the Endee server ===
+      # === OSS: start the Endee server ===
       #
       #  Official pre-built Docker image: endeeio/endee-server
       #    https://hub.docker.com/r/endeeio/endee-server
@@ -85,7 +81,7 @@ jobs:
             --name endee-oss \
             endeeio/endee-server:latest
 
-          echo "Container 'endee-oss' started. Waiting for health check..."
+          echo "Container started. Waiting for server to become ready..."
 
       - name: "[OSS] Wait for server to become ready"
         if: steps.mode.outputs.mode == 'oss'
@@ -114,21 +110,18 @@ jobs:
           docker logs endee-oss 2>&1
           exit 1
 
-      # === 4. Set up Python ===
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      # === 5. Install dependencies ===
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e .
           pip install pytest pytest-html pytest-timeout numpy
 
-      # === 6. Verify connectivity before running tests ===
       - name: Verify server connectivity
         env:
           ENDEE_TOKEN:    ${{ inputs.token }}
@@ -138,7 +131,7 @@ jobs:
           import os, sys
           from endee import Endee
 
-          token    = os.environ.get("ENDEE_TOKEN")    or None  # "" → None
+          token    = os.environ.get("ENDEE_TOKEN")    or None  # empty string treated as unset
           base_url = os.environ.get("ENDEE_BASE_URL") or None
 
           c = Endee(token=token)
@@ -153,9 +146,9 @@ jobs:
               sys.exit(1)
           PYEOF
 
-      # === 7. Run the full functional test suite ===
-      #  --junit-xml  →  machine-readable results used by the summary step
-      #  --html       →  downloadable self-contained HTML report (artifact)
+      # === Run the full functional test suite ===
+      #  --junit-xml  machine-readable results consumed by the summary step
+      #  --html       downloadable self-contained HTML report uploaded as artifact
       - name: Run functional tests
         id: pytest
         env:
@@ -172,8 +165,8 @@ jobs:
             --self-contained-html \
             2>&1 | tee test-output.txt
 
-      # === 8. Write test summary to the Actions run page ===
-      #  Visible at: Actions → <this run> → Summary
+      # === Write test summary to the Actions run page ===
+      #  Visible at: Actions, run page, Summary tab
       - name: Write test summary
         if: always()
         run: |
@@ -254,7 +247,6 @@ jobs:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
 
-      # === 9. Upload test artifacts ===
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -266,7 +258,6 @@ jobs:
             test-output.txt
           retention-days: 30
 
-      # === 10. Print container logs on failure ===
       - name: "[OSS] Print server logs on failure"
         if: steps.mode.outputs.mode == 'oss' && failure()
         run: docker logs endee-oss 2>&1 || true
