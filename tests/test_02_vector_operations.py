@@ -11,7 +11,7 @@ Tests for vector CRUD operations:
 
 import pytest
 
-from conftest import (
+from helpers import (
     DIM, N_VECTORS,
     dense_vec, make_item, uid,
 )
@@ -89,7 +89,7 @@ def test_upsert_overwrites_existing_id(empty_index):
 def test_upsert_all_precision_indexes(client):
     """Upsert vectors into indexes with different precision types."""
     from endee import Precision
-    from conftest import safe_delete
+    from helpers import safe_delete
 
     for precision in [Precision.FLOAT32, Precision.FLOAT16, Precision.INT16,
                       Precision.INT8, Precision.BINARY2]:
@@ -105,7 +105,7 @@ def test_upsert_all_precision_indexes(client):
 
 def test_upsert_all_space_type_indexes(client):
     """Upsert vectors into indexes with each space type."""
-    from conftest import safe_delete
+    from helpers import safe_delete
 
     for space_type in ["cosine", "l2", "ip"]:
         from endee import Precision

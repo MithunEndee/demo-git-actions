@@ -14,7 +14,7 @@ import pytest
 from endee import Endee, Precision
 from endee.constants import HTTP_HTTPX_1_1_LIBRARY, HTTP_HTTPX_2_LIBRARY, HTTP_REQUESTS_LIBRARY
 
-from conftest import DIM, dense_vec, safe_delete, uid
+from helpers import DIM, dense_vec, safe_delete, uid
 
 
 def make_client(library: str) -> Endee:

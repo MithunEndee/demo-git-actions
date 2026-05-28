@@ -18,7 +18,7 @@ from endee.exceptions import (
     NotFoundException,
 )
 
-from conftest import DIM, HYBRID_DIM, dense_vec, safe_delete, sparse_vec, uid
+from helpers import DIM, HYBRID_DIM, dense_vec, safe_delete, sparse_vec, uid
 
 
 # ── Index name validation (client-side, ValueError) ───────────────────────
