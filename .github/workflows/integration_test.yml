@@ -67,8 +67,12 @@ jobs:
           fi
 
       # ── 2. Checkout python client ───────────────────────────────────────
+      #  Always check out endee-io/endee-python-client explicitly so this
+      #  workflow works regardless of which repo it lives in.
       - name: Checkout endee-python-client
         uses: actions/checkout@v4
+        with:
+          repository: endee-io/endee-python-client
 
       # ── 3. OSS: start the endee server ─────────────────────────────────
       #
@@ -117,7 +121,7 @@ jobs:
               echo "Server is healthy after $((i * 2))s  ✓"
               exit 0
             fi
-            echo "  Attempt $i/30 – HTTP $HTTP – retrying in 2s..."
+            echo "  Attempt $i/30 - HTTP $HTTP - retrying in 2s..."
             sleep 2
           done
 
