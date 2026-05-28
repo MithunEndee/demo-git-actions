@@ -14,7 +14,7 @@ import pytest
 
 from endee import Endee, Precision
 
-from helpers import DIM, HYBRID_DIM, safe_delete, uid
+from helpers import DIM, HYBRID_DIM, get_index_names, safe_delete, uid
 
 
 # ── Parametrised: all precision types × all space types ──────────────────
@@ -45,7 +45,7 @@ def test_create_index_precision_space_combinations(client, precision, space_type
         assert "success" in result.lower(), f"Unexpected response: {result}"
 
         # Index must appear in list
-        names = [idx.get("name") for idx in client.list_indexes()]
+        names = get_index_names(client)
         assert name in names, f"Index '{name}' missing from list_indexes"
     finally:
         safe_delete(client, name)
@@ -139,15 +139,15 @@ def test_create_hybrid_index_bm25(client):
 # ── list_indexes ──────────────────────────────────────────────────────────
 
 def test_list_indexes_returns_list(client):
-    indexes = client.list_indexes()
-    assert isinstance(indexes, list)
+    names = get_index_names(client)
+    assert isinstance(names, list)
 
 
 def test_list_indexes_contains_created_index(client):
     name = uid("list")
     try:
         client.create_index(name=name, dimension=DIM, space_type="cosine", precision=Precision.INT8)
-        names = [idx.get("name") for idx in client.list_indexes()]
+        names = get_index_names(client)
         assert name in names
     finally:
         safe_delete(client, name)
@@ -157,7 +157,7 @@ def test_list_indexes_does_not_contain_deleted_index(client):
     name = uid("del")
     client.create_index(name=name, dimension=DIM, space_type="cosine", precision=Precision.INT8)
     client.delete_index(name)
-    names = [idx.get("name") for idx in client.list_indexes()]
+    names = get_index_names(client)
     assert name not in names
 
 
@@ -232,5 +232,5 @@ def test_delete_index_removes_from_list(client):
     name = uid("delist")
     client.create_index(name=name, dimension=DIM, space_type="cosine", precision=Precision.INT8)
     client.delete_index(name)
-    names = [idx.get("name") for idx in client.list_indexes()]
+    names = get_index_names(client)
     assert name not in names

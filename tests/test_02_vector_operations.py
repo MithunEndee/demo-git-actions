@@ -253,6 +253,8 @@ def test_delete_with_filter_eq(empty_index, client):
 
 def test_delete_with_filter_range(empty_index):
     """delete_with_filter using $range removes vectors in score range."""
+    from endee.exceptions import NotFoundException
+
     _, index = empty_index
     batch = [
         {"id": f"r_{i}", "vector": dense_vec(seed=i), "filter": {"score": i}}
@@ -262,16 +264,15 @@ def test_delete_with_filter_range(empty_index):
     # Delete score in [5, 10]
     index.delete_with_filter([{"score": {"$range": [5, 10]}}])
 
-    # Scores 5-10 should be gone; score 4 and 11 should remain
-    remaining = index.query(
-        vector=dense_vec(), top_k=20,
-        prefilter_cardinality_threshold=1_000_000,
-    )
-    remaining_ids = {r["id"] for r in remaining}
+    # Scores 5-10 should be gone (get_vector raises NotFoundException)
     for i in range(5, 11):
-        assert f"r_{i}" not in remaining_ids
+        with pytest.raises(NotFoundException):
+            index.get_vector(f"r_{i}")
+
+    # Scores outside the range should still exist
     for i in [0, 4, 11, 19]:
-        assert f"r_{i}" in remaining_ids
+        vec = index.get_vector(f"r_{i}")
+        assert vec["id"] == f"r_{i}"
 
 
 def test_delete_with_filter_in(empty_index):

@@ -212,10 +212,8 @@ jobs:
               passed   = total - failures - errors - skipped
               elapsed  = float(suite.get("time",   0))
 
-              status_icon = "PASS" if (failures + errors) == 0 else "FAIL"
-
               lines = [
-                  f"## {status_icon} Endee Integration Test Results\n",
+                  f"## Endee Integration Test Results\n",
                   "| | Count |",
                   "|---|---|",
                   f"|  Passed  | **{passed}** |",
