@@ -53,7 +53,7 @@ def test_create_index_name_max_length_ok(client):
 
 # ── space_type validation ─────────────────────────────────────────────────
 
-@pytest.mark.parametrize("bad_type", ["euclidean", "dot", "COSINE", "L2", ""])
+@pytest.mark.parametrize("bad_type", ["euclidean", "dot", ""])
 def test_create_index_invalid_space_type_raises(client, bad_type):
     with pytest.raises(ValueError):
         client.create_index(

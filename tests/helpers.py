@@ -93,3 +93,15 @@ def safe_delete(client, name: str) -> None:
         client.delete_index(name)
     except Exception:
         pass
+
+
+def get_index_names(client) -> list[str]:
+    """Return a flat list of index name strings from list_indexes().
+
+    The server returns {"indexes": ["name1", "name2", ...]}.
+    """
+    response = client.list_indexes()
+    if isinstance(response, dict):
+        return response.get("indexes", [])
+    # Fallback: already a list (future-proof)
+    return [idx if isinstance(idx, str) else idx.get("name") for idx in response]
