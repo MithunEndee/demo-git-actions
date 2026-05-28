@@ -17,15 +17,17 @@ from helpers import (
 )
 
 
-# ── upsert ────────────────────────────────────────────────────────────────
+# === upsert ===
 
 def test_upsert_single_vector(empty_index):
+    """Upserting a single vector must return a success response."""
     _, index = empty_index
     result = index.upsert([{"id": "v1", "vector": dense_vec()}])
     assert "success" in result.lower()
 
 
 def test_upsert_batch_10_vectors(empty_index):
+    """Upserting a batch of 10 vectors must return a success response."""
     _, index = empty_index
     batch = [{"id": f"b_{i}", "vector": dense_vec(seed=i)} for i in range(10)]
     result = index.upsert(batch)
@@ -41,6 +43,7 @@ def test_upsert_batch_500_vectors(empty_index):
 
 
 def test_upsert_with_meta_only(empty_index):
+    """Upserting a vector with only meta fields must succeed."""
     _, index = empty_index
     result = index.upsert([{
         "id": "meta_only",
@@ -51,6 +54,7 @@ def test_upsert_with_meta_only(empty_index):
 
 
 def test_upsert_with_filter_only(empty_index):
+    """Upserting a vector with only filter fields must succeed."""
     _, index = empty_index
     result = index.upsert([{
         "id": "filt_only",
@@ -61,6 +65,7 @@ def test_upsert_with_filter_only(empty_index):
 
 
 def test_upsert_with_meta_and_filter(empty_index):
+    """Upserting a vector with both meta and filter fields must succeed."""
     _, index = empty_index
     result = index.upsert([{
         "id": "full",
@@ -72,6 +77,7 @@ def test_upsert_with_meta_and_filter(empty_index):
 
 
 def test_upsert_without_meta_or_filter(empty_index):
+    """Upserting a bare vector with no meta or filter must succeed."""
     _, index = empty_index
     result = index.upsert([{"id": "bare", "vector": dense_vec()}])
     assert "success" in result.lower()
@@ -120,9 +126,10 @@ def test_upsert_all_space_type_indexes(client):
             safe_delete(client, name)
 
 
-# ── get_vector ────────────────────────────────────────────────────────────
+# === get_vector ===
 
 def test_get_vector_returns_correct_structure(populated_index):
+    """get_vector must return a dict containing all required keys."""
     _, index = populated_index
     vec = index.get_vector("vec_0000")
     required_keys = {"id", "meta", "filter", "norm", "vector"}
@@ -130,12 +137,14 @@ def test_get_vector_returns_correct_structure(populated_index):
 
 
 def test_get_vector_id_matches(populated_index):
+    """get_vector must return the correct id for the requested vector."""
     _, index = populated_index
     vec = index.get_vector("vec_0001")
     assert vec["id"] == "vec_0001"
 
 
 def test_get_vector_meta_preserved(populated_index):
+    """get_vector must return the meta fields exactly as upserted."""
     _, index = populated_index
     vec = index.get_vector("vec_0005")
     assert vec["meta"]["index"] == 5
@@ -143,6 +152,7 @@ def test_get_vector_meta_preserved(populated_index):
 
 
 def test_get_vector_filter_preserved(populated_index):
+    """get_vector must return the filter fields exactly as upserted."""
     _, index = populated_index
     vec = index.get_vector("vec_0000")
     assert vec["filter"]["category"] == "A"
@@ -151,6 +161,7 @@ def test_get_vector_filter_preserved(populated_index):
 
 
 def test_get_vector_has_vector_data(populated_index):
+    """get_vector must return a vector list of the correct dimension."""
     _, index = populated_index
     vec = index.get_vector("vec_0002")
     assert isinstance(vec["vector"], list)
@@ -158,15 +169,17 @@ def test_get_vector_has_vector_data(populated_index):
 
 
 def test_get_vector_norm_is_positive(populated_index):
+    """get_vector must return a positive float norm."""
     _, index = populated_index
     vec = index.get_vector("vec_0003")
     assert isinstance(vec["norm"], float)
     assert vec["norm"] > 0
 
 
-# ── update_filters ────────────────────────────────────────────────────────
+# === update_filters ===
 
 def test_update_filters_single_vector(populated_index):
+    """update_filters on a single vector must return a non-empty confirmation."""
     _, index = populated_index
     result = index.update_filters([
         {"id": "vec_0010", "filter": {"category": "Z", "score": 99}},
@@ -175,6 +188,7 @@ def test_update_filters_single_vector(populated_index):
 
 
 def test_update_filters_multiple_vectors(populated_index):
+    """update_filters on multiple vectors at once must return a non-empty confirmation."""
     _, index = populated_index
     result = index.update_filters([
         {"id": "vec_0020", "filter": {"category": "X"}},
@@ -192,9 +206,10 @@ def test_update_filters_reflected_in_get_vector(populated_index):
     assert vec["filter"]["category"] == "UPDATED"
 
 
-# ── delete_vector (by ID) ─────────────────────────────────────────────────
+# === delete_vector (by ID) ===
 
 def test_delete_vector_returns_rows_deleted(populated_index):
+    """delete_vector must return a response confirming rows were deleted."""
     _, index = populated_index
     result = index.delete_vector("vec_0040")
     assert "deleted" in result.lower()
@@ -220,7 +235,7 @@ def test_delete_vector_not_in_query_results(populated_index):
     assert target_id not in returned_ids
 
 
-# ── delete_with_filter ────────────────────────────────────────────────────
+# === delete_with_filter ===
 
 def test_delete_with_filter_eq(empty_index, client):
     """delete_with_filter using $eq should remove matching vectors."""
