@@ -27,7 +27,7 @@ Expected match counts (used in assertions):
 
 import pytest
 
-from conftest import N_VECTORS, dense_vec
+from helpers import N_VECTORS, dense_vec
 
 # Use high prefilter threshold to guarantee brute-force recall in all filter tests
 _BF = 1_000_000

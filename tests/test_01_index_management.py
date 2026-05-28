@@ -14,7 +14,7 @@ import pytest
 
 from endee import Endee, Precision
 
-from conftest import DIM, HYBRID_DIM, safe_delete, uid
+from helpers import DIM, HYBRID_DIM, safe_delete, uid
 
 
 # ── Parametrised: all precision types × all space types ──────────────────

@@ -12,7 +12,7 @@ Tests for query – basic parameters and result structure:
 
 import pytest
 
-from conftest import DIM, N_VECTORS, dense_vec
+from helpers import DIM, N_VECTORS, dense_vec
 
 
 # ── Result structure ──────────────────────────────────────────────────────

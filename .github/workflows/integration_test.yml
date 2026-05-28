@@ -117,7 +117,7 @@ jobs:
               echo "Server is healthy after $((i * 2))s  ✓"
               exit 0
             fi
-            echo "  Attempt $i/30 – HTTP $HTTP – retrying in 2s..."
+            echo "  Attempt $i/30 - HTTP $HTTP - retrying in 2s..."
             sleep 2
           done
 
@@ -166,7 +166,10 @@ jobs:
           PYEOF
 
       # ── 7. Run the full integration test suite ──────────────────────────
+      #  --junit-xml  →  machine-readable results used by the summary step
+      #  --html       →  downloadable self-contained HTML report (artifact)
       - name: Run integration tests
+        id: pytest
         env:
           ENDEE_TOKEN:    ${{ inputs.token }}
           ENDEE_BASE_URL: ${{ inputs.base_url }}
@@ -176,11 +179,83 @@ jobs:
             --timeout=120 \
             --tb=short \
             -p no:warnings \
+            --junit-xml=test-results.xml \
             --html=test-report.html \
             --self-contained-html \
             2>&1 | tee test-output.txt
 
-      # ── 8. Upload HTML report and raw output ────────────────────────────
+      # ── 8. Write a Markdown summary visible on the Actions run page ──────
+      #  Visible at:  Actions → <this run> → Summary  (top of the page)
+      - name: Write test summary to GitHub dashboard
+        if: always()
+        run: |
+          python - <<'PYEOF'
+          import xml.etree.ElementTree as ET, os, sys
+
+          summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if not summary_file:
+              print("GITHUB_STEP_SUMMARY not set – skipping summary")
+              sys.exit(0)
+
+          try:
+              tree = ET.parse("test-results.xml")
+              root = tree.getroot()
+              # pytest wraps results in a <testsuite> element
+              suite = root if root.tag == "testsuite" else root.find("testsuite")
+              if suite is None:
+                  suite = root
+
+              total    = int(suite.get("tests",    0))
+              failures = int(suite.get("failures", 0))
+              errors   = int(suite.get("errors",   0))
+              skipped  = int(suite.get("skipped",  0))
+              passed   = total - failures - errors - skipped
+              elapsed  = float(suite.get("time",   0))
+
+              status_icon = "PASS" if (failures + errors) == 0 else "FAIL"
+
+              lines = [
+                  f"## {status_icon} Endee Integration Test Results\n",
+                  "| | Count |",
+                  "|---|---|",
+                  f"|  Passed  | **{passed}** |",
+                  f"|  Failed  | **{failures}** |",
+                  f"|  Errors  | **{errors}** |",
+                  f"|  Skipped | **{skipped}** |",
+                  f"|  Total   | **{total}** |",
+                  "",
+                  f"⏱ **Duration:** {elapsed:.1f}s",
+                  "",
+              ]
+
+              # List every failed / errored test case
+              failed_cases = []
+              for tc in suite.iter("testcase"):
+                  for tag in ("failure", "error"):
+                      node = tc.find(tag)
+                      if node is not None:
+                          name      = tc.get("name", "unknown")
+                          classname = tc.get("classname", "")
+                          msg       = (node.get("message") or "").split("\n")[0][:120]
+                          failed_cases.append(f"- `{classname}::{name}` — {msg}")
+
+              if failed_cases:
+                  lines += ["###  Failed tests\n"] + failed_cases + [""]
+
+              with open(summary_file, "a") as f:
+                  f.write("\n".join(lines) + "\n")
+
+              print(f"Summary written: {passed}/{total} passed")
+
+          except FileNotFoundError:
+              with open(summary_file, "a") as f:
+                  f.write("##  Endee Integration Tests\n\ntest-results.xml not found "
+                          "(pytest may not have run).\n")
+          except Exception as exc:
+              print(f"Summary generation failed: {exc}", file=sys.stderr)
+          PYEOF
+
+      # ── 9. Upload HTML report and raw output as downloadable artifact ────
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -188,10 +263,11 @@ jobs:
           name: endee-integration-test-results
           path: |
             test-report.html
+            test-results.xml
             test-output.txt
           retention-days: 30
 
-      # ── 9. Print container logs on test failure ─────────────────────────
+      # ── 10. Print container logs on test failure ─────────────────────────
       - name: "[OSS] Print server logs on failure"
         if: steps.mode.outputs.mode == 'oss' && failure()
         run: docker logs endee-oss 2>&1 || true

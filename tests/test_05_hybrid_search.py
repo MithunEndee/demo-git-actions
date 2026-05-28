@@ -15,7 +15,7 @@ Tests for hybrid (dense + sparse) search:
 
 import pytest
 
-from conftest import HYBRID_DIM, N_VECTORS, SPARSE_DIM, dense_vec, sparse_vec
+from helpers import HYBRID_DIM, N_VECTORS, SPARSE_DIM, dense_vec, sparse_vec
 
 
 # ── Upsert ────────────────────────────────────────────────────────────────
@@ -48,7 +48,7 @@ def test_hybrid_upsert_with_meta_and_filter(empty_hybrid_index):
 
 def test_hybrid_upsert_batch(empty_hybrid_index):
     _, index = empty_hybrid_index
-    from conftest import make_item
+    from helpers import make_item
     batch = [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(20)]
     result = index.upsert(batch)
     assert "success" in result.lower()
