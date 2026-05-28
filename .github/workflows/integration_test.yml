@@ -1,52 +1,49 @@
 name: Integration Tests
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  HOW TO USE
-#  ──────────────
-#  Trigger manually from GitHub → Actions → Integration Tests → Run workflow.
+# =============================================================================
+# HOW TO USE
 #
-#  SERVERLESS / CLOUD MODE  (token provided)
-#    • Get your token from https://app.endee.io → API Token.
-#    • The client automatically extracts the correct API endpoint from the token.
-#    • Leave base_url empty; it is derived from the token automatically.
+# Trigger manually: GitHub Actions → Integration Tests → Run workflow
 #
-#  OSS / SELF-HOSTED MODE  (no token)
-#    • Leave token empty.
-#    • The workflow pulls the official pre-built Docker image
-#      (endeeio/endee-server:latest) and starts a local server on port 8080
-#      with no authentication (NDD_AUTH_TOKEN="").
-#    • base_url defaults to http://127.0.0.1:8080/api/v1.
-#    • If you are pointing to an already-running server (e.g. on another host),
-#      pass that server's base_url and leave token empty.
+# SERVERLESS MODE  (token provided)
+#   Provide an API token from the Endee Serverless (Scale plan to test all features).
+#   The client derives the correct API endpoint from the token automatically.
+#   Leave base_url empty.
 #
-#  OPTIONAL: base_url override
-#    • Use this if your server listens on a non-default port or host,
-#      e.g. http://0.0.0.0:8081/api/v1.
-# ─────────────────────────────────────────────────────────────────────────────
+# OSS / SELF-HOSTED MODE  (no token)
+#   Leave token empty.
+#   The workflow pulls the official Docker image (endeeio/endee-server:latest)
+#   and starts a local server on port 8080 with authentication disabled.
+#   base_url defaults to http://127.0.0.1:8080/api/v1.
+#   To target an already-running server on another host, set base_url 
+#   (e.g. http://0.0.0.0:8081/api/v1) and leave token empty.
+#
+# =============================================================================
 
 on:
   workflow_dispatch:
     inputs:
       token:
         description: >
-          Endee API token from app.endee.io
-          Leave EMPTY to run in OSS mode - the workflow will spin up an endee
-          Docker container automatically.
+          [OPTIONAL] API token for Endee Serverless (Scale plan).
+          Leave blank to run in OSS mode — a local Endee Docker container
+          will be started automatically and all tests will run against it.
+          Provide a token to run against Endee Serverless instead.
         required: false
         default: ""
         type: string
 
       base_url:
         description: >
-          Optional: override the API base URL
-          (e.g. http://0.0.0.0:8081/api/v1).
-          Leave empty - cloud URL is inferred from the token; OSS defaults to
-          http://127.0.0.1:8080/api/v1.
+          [OPTIONAL] Override the API base URL (e.g. http://0.0.0.0:8081/api/v1).
+          Leave blank — the URL is derived from the token in Serverless mode,
+          and defaults to http://127.0.0.1:8080/api/v1 in OSS mode.
+          Only set this if the server is running on a non-default host or port.
         required: false
         default: ""
         type: string
 
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 
 jobs:
   integration-test:
@@ -54,38 +51,38 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Detect run mode ──────────────────────────────────────────────
+      # === 1. Detect run mode ===
       - name: Detect run mode
         id: mode
         run: |
           if [ -z "${{ inputs.token }}" ]; then
             echo "mode=oss" >> "$GITHUB_OUTPUT"
-            echo "▶ OSS mode: will start endeeio/endee-server:latest via Docker"
+            echo "OSS mode: will start endeeio/endee-server:latest via Docker"
           else
             echo "mode=serverless" >> "$GITHUB_OUTPUT"
-            echo "▶ Serverless mode: will connect to Endee cloud with provided token"
+            echo "Serverless mode: will connect to Endee Serverless with provided token"
           fi
 
-      # ── 2. Checkout python client ───────────────────────────────────────
-      - name: Checkout endee-python-client
+      # === 2. Checkout repository ===
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 3. OSS: start the endee server ─────────────────────────────────
+      # === 3. OSS: start the Endee server ===
       #
-      #  We use the official pre-built Docker image published by the endee team:
+      #  Official pre-built Docker image: endeeio/endee-server
       #    https://hub.docker.com/r/endeeio/endee-server
       #
-      #  Key settings:
-      #    --ulimit nofile=100000:100000  – required by the server (high fd limit)
-      #    -p 8080:8080                  – default port
-      #    NDD_AUTH_TOKEN=""             – empty = no authentication required
-      #    NDD_NUM_THREADS=2             – limit CPU for CI runner
+      #  Runtime flags:
+      #    --ulimit nofile=100000:100000  required by the server (high fd limit)
+      #    -p 8080:8080                  default port
+      #    NDD_AUTH_TOKEN=""             empty value disables authentication
+      #    NDD_NUM_THREADS=2             limits CPU usage on the CI runner
       #
-      - name: "[OSS] Pull endee server image"
+      - name: "[OSS] Pull Endee server image"
         if: steps.mode.outputs.mode == 'oss'
         run: docker pull endeeio/endee-server:latest
 
-      - name: "[OSS] Start endee server container"
+      - name: "[OSS] Start Endee server container"
         if: steps.mode.outputs.mode == 'oss'
         run: |
           docker run -d \
@@ -98,10 +95,9 @@ jobs:
 
           echo "Container 'endee-oss' started. Waiting for health check..."
 
-      - name: "[OSS] Wait for server to be healthy"
+      - name: "[OSS] Wait for server to become ready"
         if: steps.mode.outputs.mode == 'oss'
         run: |
-          # Determine which URL to poll
           if [ -n "${{ inputs.base_url }}" ]; then
             BASE="${{ inputs.base_url }}"
           else
@@ -114,34 +110,34 @@ jobs:
           for i in $(seq 1 30); do
             HTTP=$(curl -sf -o /dev/null -w "%{http_code}" "$HEALTH" 2>/dev/null || echo "000")
             if [ "$HTTP" = "200" ]; then
-              echo "Server is healthy after $((i * 2))s  ✓"
+              echo "Server is ready after $((i * 2))s"
               exit 0
             fi
             echo "  Attempt $i/30 - HTTP $HTTP - retrying in 2s..."
             sleep 2
           done
 
-          echo "::error::Server did not become healthy within 60 seconds."
-          echo "── Container logs ──"
+          echo "::error::Server did not become ready within 60 seconds."
+          echo "Container logs:"
           docker logs endee-oss 2>&1
           exit 1
 
-      # ── 4. Set up Python ────────────────────────────────────────────────
+      # === 4. Set up Python ===
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      # ── 5. Install endee client + test dependencies ─────────────────────
+      # === 5. Install dependencies ===
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e .
           pip install pytest pytest-html pytest-timeout numpy
 
-      # ── 6. Smoke check – verify connectivity before running tests ────────
-      - name: Smoke check (list_indexes)
+      # === 6. Verify connectivity before running tests ===
+      - name: Verify server connectivity
         env:
           ENDEE_TOKEN:    ${{ inputs.token }}
           ENDEE_BASE_URL: ${{ inputs.base_url }}
@@ -165,7 +161,7 @@ jobs:
               sys.exit(1)
           PYEOF
 
-      # ── 7. Run the full integration test suite ──────────────────────────
+      # === 7. Run the full integration test suite ===
       #  --junit-xml  →  machine-readable results used by the summary step
       #  --html       →  downloadable self-contained HTML report (artifact)
       - name: Run integration tests
@@ -184,9 +180,9 @@ jobs:
             --self-contained-html \
             2>&1 | tee test-output.txt
 
-      # ── 8. Write a Markdown summary visible on the Actions run page ──────
-      #  Visible at:  Actions → <this run> → Summary  (top of the page)
-      - name: Write test summary to GitHub dashboard
+      # === 8. Write test summary to the Actions run page ===
+      #  Visible at: Actions → <this run> → Summary
+      - name: Write test summary
         if: always()
         run: |
           python - <<'PYEOF'
@@ -194,13 +190,12 @@ jobs:
 
           summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
           if not summary_file:
-              print("GITHUB_STEP_SUMMARY not set – skipping summary")
+              print("GITHUB_STEP_SUMMARY not set - skipping summary")
               sys.exit(0)
 
           try:
               tree = ET.parse("test-results.xml")
               root = tree.getroot()
-              # pytest wraps results in a <testsuite> element
               suite = root if root.tag == "testsuite" else root.find("testsuite")
               if suite is None:
                   suite = root
@@ -211,22 +206,28 @@ jobs:
               skipped  = int(suite.get("skipped",  0))
               passed   = total - failures - errors - skipped
               elapsed  = float(suite.get("time",   0))
+              bad      = failures + errors
+              status   = "PASSED" if bad == 0 else "FAILED"
+
+              mins, secs = divmod(int(elapsed), 60)
+              duration = f"{mins}m {secs}s" if mins else f"{secs}s"
 
               lines = [
-                  f"## Endee Integration Test Results\n",
-                  "| | Count |",
-                  "|---|---|",
-                  f"|  Passed  | **{passed}** |",
-                  f"|  Failed  | **{failures}** |",
-                  f"|  Errors  | **{errors}** |",
-                  f"|  Skipped | **{skipped}** |",
-                  f"|  Total   | **{total}** |",
+                  f"## Integration Test Results — {status}",
                   "",
-                  f"⏱ **Duration:** {elapsed:.1f}s",
+                  "| Result  | Count |",
+                  "|---------|------:|",
+                  f"| Passed  | {passed} |",
+                  f"| Failed  | {failures} |",
+                  f"| Errors  | {errors} |",
+                  f"| Skipped | {skipped} |",
+                  f"| **Total**   | **{total}** |",
+                  "",
+                  f"**Duration:** {duration}",
                   "",
               ]
 
-              # List every failed / errored test case
+              # Collect every failed / errored test case with full message
               failed_cases = []
               for tc in suite.iter("testcase"):
                   for tag in ("failure", "error"):
@@ -234,26 +235,35 @@ jobs:
                       if node is not None:
                           name      = tc.get("name", "unknown")
                           classname = tc.get("classname", "")
-                          msg       = (node.get("message") or "").split("\n")[0][:120]
-                          failed_cases.append(f"- `{classname}::{name}` — {msg}")
+                          msg       = (node.get("message") or node.text or "").strip().split("\n")[0][:200]
+                          failed_cases.append((classname, name, msg))
 
               if failed_cases:
-                  lines += ["###  Failed tests\n"] + failed_cases + [""]
+                  lines += [
+                      f"<details>",
+                      f"<summary>Failed tests ({len(failed_cases)})</summary>",
+                      "",
+                      "| Test | Reason |",
+                      "|------|--------|",
+                  ]
+                  for classname, name, msg in failed_cases:
+                      lines.append(f"| `{classname}::{name}` | {msg} |")
+                  lines += ["", "</details>", ""]
 
               with open(summary_file, "a") as f:
                   f.write("\n".join(lines) + "\n")
 
-              print(f"Summary written: {passed}/{total} passed")
+              print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
               with open(summary_file, "a") as f:
-                  f.write("##  Endee Integration Tests\n\ntest-results.xml not found "
-                          "(pytest may not have run).\n")
+                  f.write("## Integration Test Results\n\n"
+                          "test-results.xml not found — pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
 
-      # ── 9. Upload HTML report and raw output as downloadable artifact ────
+      # === 9. Upload test artifacts ===
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -265,7 +275,7 @@ jobs:
             test-output.txt
           retention-days: 30
 
-      # ── 10. Print container logs on test failure ─────────────────────────
+      # === 10. Print container logs on failure ===
       - name: "[OSS] Print server logs on failure"
         if: steps.mode.outputs.mode == 'oss' && failure()
         run: docker logs endee-oss 2>&1 || true
