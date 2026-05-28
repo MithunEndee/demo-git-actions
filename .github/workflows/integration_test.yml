@@ -1,0 +1,197 @@
+name: Integration Tests
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  HOW TO USE
+#  ──────────────
+#  Trigger manually from GitHub → Actions → Integration Tests → Run workflow.
+#
+#  SERVERLESS / CLOUD MODE  (token provided)
+#    • Get your token from https://app.endee.io → API Token.
+#    • The client automatically extracts the correct API endpoint from the token.
+#    • Leave base_url empty; it is derived from the token automatically.
+#
+#  OSS / SELF-HOSTED MODE  (no token)
+#    • Leave token empty.
+#    • The workflow pulls the official pre-built Docker image
+#      (endeeio/endee-server:latest) and starts a local server on port 8080
+#      with no authentication (NDD_AUTH_TOKEN="").
+#    • base_url defaults to http://127.0.0.1:8080/api/v1.
+#    • If you are pointing to an already-running server (e.g. on another host),
+#      pass that server's base_url and leave token empty.
+#
+#  OPTIONAL: base_url override
+#    • Use this if your server listens on a non-default port or host,
+#      e.g. http://0.0.0.0:8081/api/v1.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      token:
+        description: >
+          Endee API token from app.endee.io
+          Leave EMPTY to run in OSS mode - the workflow will spin up an endee
+          Docker container automatically.
+        required: false
+        default: ""
+        type: string
+
+      base_url:
+        description: >
+          Optional: override the API base URL
+          (e.g. http://0.0.0.0:8081/api/v1).
+          Leave empty - cloud URL is inferred from the token; OSS defaults to
+          http://127.0.0.1:8080/api/v1.
+        required: false
+        default: ""
+        type: string
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  integration-test:
+    name: Endee Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Detect run mode ──────────────────────────────────────────────
+      - name: Detect run mode
+        id: mode
+        run: |
+          if [ -z "${{ inputs.token }}" ]; then
+            echo "mode=oss" >> "$GITHUB_OUTPUT"
+            echo "▶ OSS mode: will start endeeio/endee-server:latest via Docker"
+          else
+            echo "mode=serverless" >> "$GITHUB_OUTPUT"
+            echo "▶ Serverless mode: will connect to Endee cloud with provided token"
+          fi
+
+      # ── 2. Checkout python client ───────────────────────────────────────
+      - name: Checkout endee-python-client
+        uses: actions/checkout@v4
+
+      # ── 3. OSS: start the endee server ─────────────────────────────────
+      #
+      #  We use the official pre-built Docker image published by the endee team:
+      #    https://hub.docker.com/r/endeeio/endee-server
+      #
+      #  Key settings:
+      #    --ulimit nofile=100000:100000  – required by the server (high fd limit)
+      #    -p 8080:8080                  – default port
+      #    NDD_AUTH_TOKEN=""             – empty = no authentication required
+      #    NDD_NUM_THREADS=2             – limit CPU for CI runner
+      #
+      - name: "[OSS] Pull endee server image"
+        if: steps.mode.outputs.mode == 'oss'
+        run: docker pull endeeio/endee-server:latest
+
+      - name: "[OSS] Start endee server container"
+        if: steps.mode.outputs.mode == 'oss'
+        run: |
+          docker run -d \
+            --ulimit nofile=100000:100000 \
+            -p 8080:8080 \
+            -e NDD_AUTH_TOKEN="" \
+            -e NDD_NUM_THREADS=2 \
+            --name endee-oss \
+            endeeio/endee-server:latest
+
+          echo "Container 'endee-oss' started. Waiting for health check..."
+
+      - name: "[OSS] Wait for server to be healthy"
+        if: steps.mode.outputs.mode == 'oss'
+        run: |
+          # Determine which URL to poll
+          if [ -n "${{ inputs.base_url }}" ]; then
+            BASE="${{ inputs.base_url }}"
+          else
+            BASE="http://127.0.0.1:8080/api/v1"
+          fi
+
+          HEALTH="$BASE/health"
+          echo "Polling $HEALTH for up to 60 seconds..."
+
+          for i in $(seq 1 30); do
+            HTTP=$(curl -sf -o /dev/null -w "%{http_code}" "$HEALTH" 2>/dev/null || echo "000")
+            if [ "$HTTP" = "200" ]; then
+              echo "Server is healthy after $((i * 2))s  ✓"
+              exit 0
+            fi
+            echo "  Attempt $i/30 – HTTP $HTTP – retrying in 2s..."
+            sleep 2
+          done
+
+          echo "::error::Server did not become healthy within 60 seconds."
+          echo "── Container logs ──"
+          docker logs endee-oss 2>&1
+          exit 1
+
+      # ── 4. Set up Python ────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # ── 5. Install endee client + test dependencies ─────────────────────
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-html pytest-timeout numpy
+
+      # ── 6. Smoke check – verify connectivity before running tests ────────
+      - name: Smoke check (list_indexes)
+        env:
+          ENDEE_TOKEN:    ${{ inputs.token }}
+          ENDEE_BASE_URL: ${{ inputs.base_url }}
+        run: |
+          python - <<'PYEOF'
+          import os, sys
+          from endee import Endee
+
+          token    = os.environ.get("ENDEE_TOKEN")    or None  # "" → None
+          base_url = os.environ.get("ENDEE_BASE_URL") or None
+
+          c = Endee(token=token)
+          if base_url:
+              c.set_base_url(base_url)
+
+          try:
+              indexes = c.list_indexes()
+              print(f"Connected successfully. Existing indexes: {len(indexes)}")
+          except Exception as e:
+              print(f"Connection failed: {e}", file=sys.stderr)
+              sys.exit(1)
+          PYEOF
+
+      # ── 7. Run the full integration test suite ──────────────────────────
+      - name: Run integration tests
+        env:
+          ENDEE_TOKEN:    ${{ inputs.token }}
+          ENDEE_BASE_URL: ${{ inputs.base_url }}
+        run: |
+          pytest tests/ \
+            -v \
+            --timeout=120 \
+            --tb=short \
+            -p no:warnings \
+            --html=test-report.html \
+            --self-contained-html \
+            2>&1 | tee test-output.txt
+
+      # ── 8. Upload HTML report and raw output ────────────────────────────
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: endee-integration-test-results
+          path: |
+            test-report.html
+            test-output.txt
+          retention-days: 30
+
+      # ── 9. Print container logs on test failure ─────────────────────────
+      - name: "[OSS] Print server logs on failure"
+        if: steps.mode.outputs.mode == 'oss' && failure()
+        run: docker logs endee-oss 2>&1 || true
