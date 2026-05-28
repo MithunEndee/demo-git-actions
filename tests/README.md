@@ -1,7 +1,7 @@
-# Integration Tests
+# Functional Tests
 
 End-to-end tests for the Endee Python client. Tests run against a live Endee
-server — either the hosted cloud or a local OSS Docker container.
+Server — either the hosted cloud or a local OSS Docker container.
 
 ---
 
@@ -53,7 +53,7 @@ pytest
 
 ## Running via GitHub Actions
 
-Trigger manually: **Actions → Integration Tests → Run workflow**
+Trigger manually: **Actions → Functional Tests → Run workflow**
 
 | Input | Description |
 |-------|-------------|
@@ -69,13 +69,12 @@ and JUnit XML are also uploaded as artifacts.
 
 | File | What it covers |
 |------|----------------|
-| `test_01_index_management.py` | Create, list, describe, delete indexes; all precision × space type combinations; HNSW params; hybrid indexes |
-| `test_02_vector_operations.py` | Upsert, get, update filters, delete by ID, delete by filter |
-| `test_03_query_basic.py` | Query result structure, `top_k`, `ef`, `include_vectors`, meta round-trip |
-| `test_04_query_filters.py` | `$eq`, `$in`, `$range` operators; combined filters; `filter_boost_percentage`; `prefilter_cardinality_threshold` |
-| `test_05_hybrid_search.py` | Dense-only, sparse-only, and full hybrid queries; result structure; `top_k`/`ef`; `$eq`/`$in`/`$range` filters; `filter_boost_percentage`; RRF weights; `get_vector`; `update_filters`; `delete_vector`; `delete_with_filter` |
-| `test_06_error_handling.py` | Client-side `ValueError` for invalid inputs; server-side `ConflictException` / `NotFoundException`; batch and dimension constraints |
-| `test_07_http_libraries.py` | Full CRUD smoke test repeated for `requests`, `httpx1.1`, and `httpx2` backends |
+| `test_index_management.py` | Create, list, describe, delete indexes; all precision × space type combinations; HNSW params; hybrid indexes |
+| `test_vector_operations.py` | Upsert, get, update filters, delete by ID, delete by filter |
+| `test_query_basic.py` | Query result structure, `top_k`, `ef`, `include_vectors`, meta round-trip |
+| `test_query_filters.py` | `$eq`, `$in`, `$range` operators; combined filters; `filter_boost_percentage`; `prefilter_cardinality_threshold` |
+| `test_hybrid_search.py` | Dense-only, sparse-only, and full hybrid queries; result structure; `top_k`/`ef`; `$eq`/`$in`/`$range` filters; `filter_boost_percentage`; RRF weights; `get_vector`; `update_filters`; `delete_vector`; `delete_with_filter` |
+| `test_error_handling.py` | Client-side `ValueError` for invalid inputs; server-side `ConflictException` / `NotFoundException`; batch and dimension constraints |
 
 ---
 
