@@ -93,7 +93,8 @@ def test_query_top_k_1_returns_single_result(populated_index):
 
 def test_query_top_k_equals_n_returns_all_vectors(populated_index):
     _, index = populated_index
-    results = index.query(vector=dense_vec(), top_k=N_VECTORS)
+    # ef=1024 forces high-quality search to guarantee full recall on N=50 vectors
+    results = index.query(vector=dense_vec(), top_k=N_VECTORS, ef=1024)
     assert len(results) == N_VECTORS
 
 
