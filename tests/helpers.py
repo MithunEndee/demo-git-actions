@@ -98,10 +98,21 @@ def safe_delete(client, name: str) -> None:
 def get_index_names(client) -> list[str]:
     """Return a flat list of index name strings from list_indexes().
 
-    The server returns {"indexes": ["name1", "name2", ...]}.
+    Handles all known server response shapes:
+      - list of dicts:  [{"name": "x", "M": 16, ...}, ...]
+      - dict envelope:  {"indexes": ["x", ...]} or {"indexes": [{"name": "x"}, ...]}
+      - list of strings: ["x", "y", ...]
     """
     response = client.list_indexes()
     if isinstance(response, dict):
-        return response.get("indexes", [])
-    # Fallback: already a list (future-proof)
-    return [idx if isinstance(idx, str) else idx.get("name") for idx in response]
+        items = response.get("indexes", [])
+    else:
+        items = list(response)
+
+    names = []
+    for item in items:
+        if isinstance(item, str):
+            names.append(item)
+        elif isinstance(item, dict) and "name" in item:
+            names.append(item["name"])
+    return names
