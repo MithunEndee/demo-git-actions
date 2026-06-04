@@ -1,0 +1,25 @@
+name: Lint Python Code
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Check Code Formatting
+        # Ensures consistent formatting (catches spacing issues like missing whitespace after commas)
+        run: ruff format --check .
+
+      - name: Check PEP8 Standards
+        # This will return a non-zero exit code if it fails, blocking the PR
+        run: ruff check .
