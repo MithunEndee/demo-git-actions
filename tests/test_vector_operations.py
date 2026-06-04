@@ -15,7 +15,6 @@ from helpers import (
     DIM,
     N_VECTORS,
     dense_vec,
-    make_item,
     uid,
 )
 

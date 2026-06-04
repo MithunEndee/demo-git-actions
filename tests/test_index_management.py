@@ -12,7 +12,7 @@ Tests for index lifecycle:
 
 import pytest
 
-from endee import Endee, Precision
+from endee import Precision
 
 from helpers import DIM, HYBRID_DIM, get_index_names, safe_delete, uid
 

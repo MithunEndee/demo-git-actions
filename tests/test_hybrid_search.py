@@ -26,12 +26,9 @@ from endee.exceptions import NotFoundException
 from helpers import (
     HYBRID_DIM,
     N_VECTORS,
-    SPARSE_DIM,
     dense_vec,
     make_item,
     sparse_vec,
-    safe_delete,
-    uid,
 )
 
 

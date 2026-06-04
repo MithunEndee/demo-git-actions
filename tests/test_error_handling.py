@@ -12,7 +12,6 @@ import pytest
 
 from endee import Endee, Precision
 from endee.exceptions import (
-    APIException,
     ConflictException,
     EndeeException,
     NotFoundException,
