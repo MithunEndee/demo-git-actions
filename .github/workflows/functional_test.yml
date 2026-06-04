@@ -248,7 +248,10 @@ jobs:
         uses: mikepenz/action-junit-report@v4
         if: always()  # Crucial: forces this to run even if pytest fails
         with:
-          files: test-results.xml
+          # files: test-results.xml
+          report_paths: '**/test-results.xml'
+          detailed_summary: true
+          include_passed: true
 
       - name: Upload test artifacts
         if: always()
