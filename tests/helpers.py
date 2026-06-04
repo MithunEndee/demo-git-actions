@@ -11,14 +11,15 @@ import uuid
 import numpy as np
 
 # === Test-wide constants ===
-DIM = 16          # Dense vector dimension for most tests
-HYBRID_DIM = 16   # Dense dimension for hybrid tests
+DIM = 16  # Dense vector dimension for most tests
+HYBRID_DIM = 16  # Dense dimension for hybrid tests
 SPARSE_DIM = 500  # Vocabulary size for sparse vectors
-SPARSE_NNZ = 8    # Non-zero terms per sparse vector
-N_VECTORS = 50    # Vectors inserted per populated fixture
+SPARSE_NNZ = 8  # Non-zero terms per sparse vector
+N_VECTORS = 50  # Vectors inserted per populated fixture
 
 
 # === Vector / item generators ===
+
 
 def uid(prefix: str = "t") -> str:
     """Return a unique index name that fits inside the 48-char limit."""

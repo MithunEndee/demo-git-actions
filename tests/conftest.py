@@ -80,5 +80,7 @@ def empty_hybrid_index(client):
 def populated_hybrid_index(client, empty_hybrid_index):
     """Yield (name, index) hybrid index with N_VECTORS vectors."""
     name, index = empty_hybrid_index
-    index.upsert([make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(N_VECTORS)])
+    index.upsert(
+        [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(N_VECTORS)]
+    )
     yield name, index

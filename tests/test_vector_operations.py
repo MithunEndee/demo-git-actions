@@ -12,12 +12,16 @@ Tests for vector CRUD operations:
 import pytest
 
 from helpers import (
-    DIM, N_VECTORS,
-    dense_vec, make_item, uid,
+    DIM,
+    N_VECTORS,
+    dense_vec,
+    make_item,
+    uid,
 )
 
 
 # === upsert ===
+
 
 def test_upsert_single_vector(empty_index):
     """Upserting a single vector must return a success response."""
@@ -45,34 +49,46 @@ def test_upsert_batch_500_vectors(empty_index):
 def test_upsert_with_meta_only(empty_index):
     """Upserting a vector with only meta fields must succeed."""
     _, index = empty_index
-    result = index.upsert([{
-        "id": "meta_only",
-        "vector": dense_vec(),
-        "meta": {"title": "Hello", "value": 42},
-    }])
+    result = index.upsert(
+        [
+            {
+                "id": "meta_only",
+                "vector": dense_vec(),
+                "meta": {"title": "Hello", "value": 42},
+            }
+        ]
+    )
     assert "success" in result.lower()
 
 
 def test_upsert_with_filter_only(empty_index):
     """Upserting a vector with only filter fields must succeed."""
     _, index = empty_index
-    result = index.upsert([{
-        "id": "filt_only",
-        "vector": dense_vec(),
-        "filter": {"category": "X", "score": 5},
-    }])
+    result = index.upsert(
+        [
+            {
+                "id": "filt_only",
+                "vector": dense_vec(),
+                "filter": {"category": "X", "score": 5},
+            }
+        ]
+    )
     assert "success" in result.lower()
 
 
 def test_upsert_with_meta_and_filter(empty_index):
     """Upserting a vector with both meta and filter fields must succeed."""
     _, index = empty_index
-    result = index.upsert([{
-        "id": "full",
-        "vector": dense_vec(),
-        "meta": {"text": "doc"},
-        "filter": {"category": "A", "score": 10, "tags": "important"},
-    }])
+    result = index.upsert(
+        [
+            {
+                "id": "full",
+                "vector": dense_vec(),
+                "meta": {"text": "doc"},
+                "filter": {"category": "A", "score": 10, "tags": "important"},
+            }
+        ]
+    )
     assert "success" in result.lower()
 
 
@@ -97,11 +113,18 @@ def test_upsert_all_precision_indexes(client):
     from endee import Precision
     from helpers import safe_delete
 
-    for precision in [Precision.FLOAT32, Precision.FLOAT16, Precision.INT16,
-                      Precision.INT8, Precision.BINARY2]:
+    for precision in [
+        Precision.FLOAT32,
+        Precision.FLOAT16,
+        Precision.INT16,
+        Precision.INT8,
+        Precision.BINARY2,
+    ]:
         name = uid("prec")
         try:
-            client.create_index(name=name, dimension=DIM, space_type="cosine", precision=precision)
+            client.create_index(
+                name=name, dimension=DIM, space_type="cosine", precision=precision
+            )
             index = client.get_index(name)
             result = index.upsert([{"id": "v1", "vector": dense_vec(seed=0)}])
             assert "success" in result.lower(), f"Failed for precision {precision}"
@@ -115,10 +138,15 @@ def test_upsert_all_space_type_indexes(client):
 
     for space_type in ["cosine", "l2", "ip"]:
         from endee import Precision
+
         name = uid("st")
         try:
-            client.create_index(name=name, dimension=DIM, space_type=space_type,
-                                precision=Precision.INT8)
+            client.create_index(
+                name=name,
+                dimension=DIM,
+                space_type=space_type,
+                precision=Precision.INT8,
+            )
             index = client.get_index(name)
             result = index.upsert([{"id": "v1", "vector": dense_vec(seed=0)}])
             assert "success" in result.lower(), f"Failed for space_type {space_type}"
@@ -128,12 +156,15 @@ def test_upsert_all_space_type_indexes(client):
 
 # === get_vector ===
 
+
 def test_get_vector_returns_correct_structure(populated_index):
     """get_vector must return a dict containing all required keys."""
     _, index = populated_index
     vec = index.get_vector("vec_0000")
     required_keys = {"id", "meta", "filter", "norm", "vector"}
-    assert required_keys.issubset(vec.keys()), f"Missing keys: {required_keys - vec.keys()}"
+    assert required_keys.issubset(vec.keys()), (
+        f"Missing keys: {required_keys - vec.keys()}"
+    )
 
 
 def test_get_vector_id_matches(populated_index):
@@ -178,23 +209,28 @@ def test_get_vector_norm_is_positive(populated_index):
 
 # === update_filters ===
 
+
 def test_update_filters_single_vector(populated_index):
     """update_filters on a single vector must return a non-empty confirmation."""
     _, index = populated_index
-    result = index.update_filters([
-        {"id": "vec_0010", "filter": {"category": "Z", "score": 99}},
-    ])
+    result = index.update_filters(
+        [
+            {"id": "vec_0010", "filter": {"category": "Z", "score": 99}},
+        ]
+    )
     assert result  # server returns a non-empty confirmation
 
 
 def test_update_filters_multiple_vectors(populated_index):
     """update_filters on multiple vectors at once must return a non-empty confirmation."""
     _, index = populated_index
-    result = index.update_filters([
-        {"id": "vec_0020", "filter": {"category": "X"}},
-        {"id": "vec_0021", "filter": {"category": "Y"}},
-        {"id": "vec_0022", "filter": {"category": "Z"}},
-    ])
+    result = index.update_filters(
+        [
+            {"id": "vec_0020", "filter": {"category": "X"}},
+            {"id": "vec_0021", "filter": {"category": "Y"}},
+            {"id": "vec_0022", "filter": {"category": "Z"}},
+        ]
+    )
     assert result
 
 
@@ -207,6 +243,7 @@ def test_update_filters_reflected_in_get_vector(populated_index):
 
 
 # === delete_vector (by ID) ===
+
 
 def test_delete_vector_returns_rows_deleted(populated_index):
     """delete_vector must return a response confirming rows were deleted."""
@@ -237,13 +274,17 @@ def test_delete_vector_not_in_query_results(populated_index):
 
 # === delete_with_filter ===
 
+
 def test_delete_with_filter_eq(empty_index, client):
     """delete_with_filter using $eq should remove matching vectors."""
     name, index = empty_index
     # Insert 6 vectors: 3 with tag "to_delete", 3 with tag "keep"
     batch = [
-        {"id": f"d_{i}", "vector": dense_vec(seed=i),
-         "filter": {"tag": "to_delete" if i < 3 else "keep"}}
+        {
+            "id": f"d_{i}",
+            "vector": dense_vec(seed=i),
+            "filter": {"tag": "to_delete" if i < 3 else "keep"},
+        }
         for i in range(6)
     ]
     index.upsert(batch)
@@ -251,7 +292,8 @@ def test_delete_with_filter_eq(empty_index, client):
 
     # "keep" vectors should still be queryable
     results = index.query(
-        vector=dense_vec(), top_k=10,
+        vector=dense_vec(),
+        top_k=10,
         filter=[{"tag": {"$eq": "keep"}}],
         prefilter_cardinality_threshold=1_000_000,
     )
@@ -295,8 +337,7 @@ def test_delete_with_filter_in(empty_index):
     _, index = empty_index
     tags = ["alpha", "beta", "gamma"]
     batch = [
-        {"id": f"in_{i}", "vector": dense_vec(seed=i),
-         "filter": {"tag": tags[i % 3]}}
+        {"id": f"in_{i}", "vector": dense_vec(seed=i), "filter": {"tag": tags[i % 3]}}
         for i in range(9)
     ]
     index.upsert(batch)
@@ -304,7 +345,8 @@ def test_delete_with_filter_in(empty_index):
     index.delete_with_filter([{"tag": {"$in": ["alpha", "beta"]}}])
 
     remaining = index.query(
-        vector=dense_vec(), top_k=10,
+        vector=dense_vec(),
+        top_k=10,
         filter=[{"tag": {"$eq": "gamma"}}],
         prefilter_cardinality_threshold=1_000_000,
     )

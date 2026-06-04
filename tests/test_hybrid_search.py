@@ -23,21 +23,35 @@ import pytest
 
 from endee.exceptions import NotFoundException
 
-from helpers import HYBRID_DIM, N_VECTORS, SPARSE_DIM, dense_vec, make_item, sparse_vec, safe_delete, uid
+from helpers import (
+    HYBRID_DIM,
+    N_VECTORS,
+    SPARSE_DIM,
+    dense_vec,
+    make_item,
+    sparse_vec,
+    safe_delete,
+    uid,
+)
 
 
 # === Upsert ===
+
 
 def test_hybrid_upsert_succeeds(empty_hybrid_index):
     """Upserting a single hybrid vector must return a success response."""
     _, index = empty_hybrid_index
     si, sv = sparse_vec(seed=0)
-    result = index.upsert([{
-        "id": "hv1",
-        "vector": dense_vec(HYBRID_DIM, seed=0),
-        "sparse_indices": si,
-        "sparse_values": sv,
-    }])
+    result = index.upsert(
+        [
+            {
+                "id": "hv1",
+                "vector": dense_vec(HYBRID_DIM, seed=0),
+                "sparse_indices": si,
+                "sparse_values": sv,
+            }
+        ]
+    )
     assert "success" in result.lower()
 
 
@@ -45,14 +59,18 @@ def test_hybrid_upsert_with_meta_and_filter(empty_hybrid_index):
     """Upserting a hybrid vector with meta and filter fields must succeed."""
     _, index = empty_hybrid_index
     si, sv = sparse_vec(seed=1)
-    result = index.upsert([{
-        "id": "hv_full",
-        "vector": dense_vec(HYBRID_DIM, seed=1),
-        "sparse_indices": si,
-        "sparse_values": sv,
-        "meta": {"title": "hybrid doc"},
-        "filter": {"category": "A"},
-    }])
+    result = index.upsert(
+        [
+            {
+                "id": "hv_full",
+                "vector": dense_vec(HYBRID_DIM, seed=1),
+                "sparse_indices": si,
+                "sparse_values": sv,
+                "meta": {"title": "hybrid doc"},
+                "filter": {"category": "A"},
+            }
+        ]
+    )
     assert "success" in result.lower()
 
 
@@ -60,12 +78,14 @@ def test_hybrid_upsert_batch(empty_hybrid_index):
     """Upserting a batch of hybrid vectors must return a success response."""
     _, index = empty_hybrid_index
     from helpers import make_item
+
     batch = [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(20)]
     result = index.upsert(batch)
     assert "success" in result.lower()
 
 
 # === Dense-only query on hybrid index ===
+
 
 def test_hybrid_dense_only_query(populated_hybrid_index):
     """Hybrid index accepts a query with only dense vector (no sparse)."""
@@ -86,6 +106,7 @@ def test_hybrid_dense_only_result_structure(populated_hybrid_index):
 
 # === Sparse-only query on hybrid index ===
 
+
 def test_hybrid_sparse_only_query(populated_hybrid_index):
     """Query with only sparse_indices/values, no dense vector."""
     _, index = populated_hybrid_index
@@ -96,6 +117,7 @@ def test_hybrid_sparse_only_query(populated_hybrid_index):
 
 
 # === Full hybrid query ===
+
 
 def test_hybrid_full_query(populated_hybrid_index):
     """Full hybrid query with both dense and sparse inputs must return results."""
@@ -126,6 +148,7 @@ def test_hybrid_query_results_ordered_by_similarity(populated_hybrid_index):
 
 
 # === Hybrid query with filter ===
+
 
 def test_hybrid_query_with_eq_filter(populated_hybrid_index):
     """Hybrid query with a $eq filter must return only matching vectors."""
@@ -162,6 +185,7 @@ def test_hybrid_query_with_range_filter(populated_hybrid_index):
 
 
 # === RRF weight variations ===
+
 
 @pytest.mark.parametrize("weight", [0.0, 0.2, 0.5, 0.7, 1.0])
 def test_hybrid_rrf_weight_accepted(populated_hybrid_index, weight):
@@ -208,6 +232,7 @@ def test_hybrid_rrf_weight_1_emphasises_dense(populated_hybrid_index):
 
 # === rrf_rank_constant variations ===
 
+
 @pytest.mark.parametrize("rrc", [1, 10, 30, 60, 120, 200])
 def test_hybrid_rrf_rank_constant_accepted(populated_hybrid_index, rrc):
     """All valid rrf_rank_constant values must be accepted without error."""
@@ -224,6 +249,7 @@ def test_hybrid_rrf_rank_constant_accepted(populated_hybrid_index, rrc):
 
 
 # === include_vectors on hybrid index ===
+
 
 def test_hybrid_include_vectors_true(populated_hybrid_index):
     """include_vectors=True on a hybrid index must return full-dimension dense vectors."""
@@ -257,6 +283,7 @@ def test_hybrid_include_vectors_false(populated_hybrid_index):
 
 
 # === get_vector on hybrid index returns sparse data ===
+
 
 def test_hybrid_get_vector_has_sparse_keys(populated_hybrid_index):
     """get_vector on a hybrid index must include sparse_indices and sparse_values keys."""
@@ -331,6 +358,7 @@ def test_hybrid_get_vector_has_dense_vector(populated_hybrid_index):
 
 # === Query result structure ===
 
+
 def test_hybrid_query_result_has_required_keys(populated_hybrid_index):
     """Hybrid query results must contain all required response keys."""
     _, index = populated_hybrid_index
@@ -374,6 +402,7 @@ def test_hybrid_query_distance_equals_one_minus_similarity(populated_hybrid_inde
 
 
 # === top_k and ef variations ===
+
 
 @pytest.mark.parametrize("top_k", [1, 5, 10, 20, 30, 50])
 def test_hybrid_query_top_k_returns_at_most_k_results(populated_hybrid_index, top_k):
@@ -419,6 +448,7 @@ def test_hybrid_query_ef_parameter_accepted(populated_hybrid_index, ef):
 
 # === $in and additional filter operators on hybrid index ===
 
+
 def test_hybrid_query_with_in_filter(populated_hybrid_index):
     """Hybrid query with a $in filter must return only vectors matching one of the listed values."""
     _, index = populated_hybrid_index
@@ -459,6 +489,7 @@ def test_hybrid_query_with_combined_filters(populated_hybrid_index):
 
 # === filter_boost_percentage on hybrid index ===
 
+
 @pytest.mark.parametrize("boost", [0, 10, 25, 50, 100, 200, 400])
 def test_hybrid_filter_boost_percentage_accepted(populated_hybrid_index, boost):
     """All valid filter_boost_percentage values must be accepted by a hybrid query."""
@@ -494,23 +525,28 @@ def test_hybrid_filter_boost_results_satisfy_filter(populated_hybrid_index):
 
 # === update_filters on hybrid index ===
 
+
 def test_hybrid_update_filters_single_vector(populated_hybrid_index):
     """update_filters on a hybrid index must return a non-empty confirmation."""
     _, index = populated_hybrid_index
-    result = index.update_filters([
-        {"id": "vec_0010", "filter": {"category": "Z", "score": 99}},
-    ])
+    result = index.update_filters(
+        [
+            {"id": "vec_0010", "filter": {"category": "Z", "score": 99}},
+        ]
+    )
     assert result
 
 
 def test_hybrid_update_filters_multiple_vectors(populated_hybrid_index):
     """update_filters with multiple entries on a hybrid index must succeed."""
     _, index = populated_hybrid_index
-    result = index.update_filters([
-        {"id": "vec_0020", "filter": {"category": "X"}},
-        {"id": "vec_0021", "filter": {"category": "Y"}},
-        {"id": "vec_0022", "filter": {"category": "Z"}},
-    ])
+    result = index.update_filters(
+        [
+            {"id": "vec_0020", "filter": {"category": "X"}},
+            {"id": "vec_0021", "filter": {"category": "Y"}},
+            {"id": "vec_0022", "filter": {"category": "Z"}},
+        ]
+    )
     assert result
 
 
@@ -523,6 +559,7 @@ def test_hybrid_update_filters_reflected_in_get_vector(populated_hybrid_index):
 
 
 # === delete_vector on hybrid index ===
+
 
 def test_hybrid_delete_vector_returns_deleted(populated_hybrid_index):
     """delete_vector on a hybrid index must return a response containing 'deleted'."""
@@ -556,11 +593,13 @@ def test_hybrid_delete_vector_not_in_query_results(populated_hybrid_index):
 
 # === delete_with_filter on hybrid index ===
 
+
 def test_hybrid_delete_with_filter_eq(empty_hybrid_index):
     """delete_with_filter using $eq must remove matching vectors from a hybrid index."""
     _, index = empty_hybrid_index
     batch = [
-        make_item(i, dim=HYBRID_DIM, with_sparse=True) | {"filter": {"tag": "remove" if i < 3 else "keep"}}
+        make_item(i, dim=HYBRID_DIM, with_sparse=True)
+        | {"filter": {"tag": "remove" if i < 3 else "keep"}}
         for i in range(6)
     ]
     index.upsert(batch)
@@ -596,7 +635,8 @@ def test_hybrid_delete_with_filter_in(empty_hybrid_index):
     _, index = empty_hybrid_index
     tags = ["alpha", "beta", "gamma"]
     batch = [
-        make_item(i, dim=HYBRID_DIM, with_sparse=True) | {"filter": {"tag": tags[i % 3]}}
+        make_item(i, dim=HYBRID_DIM, with_sparse=True)
+        | {"filter": {"tag": tags[i % 3]}}
         for i in range(9)
     ]
     index.upsert(batch)

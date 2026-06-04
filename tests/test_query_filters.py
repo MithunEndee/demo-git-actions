@@ -35,6 +35,7 @@ _BF = 1_000_000
 
 # === $eq operator ===
 
+
 def test_filter_eq_all_results_match(populated_index):
     """All results from a $eq filter must have the expected field value."""
     _, index = populated_index
@@ -46,7 +47,9 @@ def test_filter_eq_all_results_match(populated_index):
     )
     assert len(results) > 0
     for r in results:
-        assert r["filter"]["category"] == "A", f"Expected 'A', got {r['filter']['category']}"
+        assert r["filter"]["category"] == "A", (
+            f"Expected 'A', got {r['filter']['category']}"
+        )
 
 
 def test_filter_eq_exact_count(populated_index):
@@ -103,6 +106,7 @@ def test_filter_eq_no_match_returns_empty(populated_index):
 
 # === $in operator ===
 
+
 def test_filter_in_single_value(populated_index):
     """$in filter with a single value must behave like $eq for that value."""
     _, index = populated_index
@@ -156,6 +160,7 @@ def test_filter_in_tags(populated_index):
 
 
 # === $range operator ===
+
 
 def test_filter_range_returns_correct_count(populated_index):
     """$range filter must return the expected number of matching vectors."""
@@ -212,6 +217,7 @@ def test_filter_range_narrow(populated_index):
 
 
 # === Combined filters (AND logic) ===
+
 
 def test_filter_and_eq_and_eq(populated_index):
     """category='A' AND tags='important' → 9 vectors (i=0,6,12,18,24,30,36,42,48)."""
@@ -291,6 +297,7 @@ def test_filter_three_conditions(populated_index):
 
 # === filter_boost_percentage ===
 
+
 @pytest.mark.parametrize("boost", [0, 10, 25, 50, 100, 200, 400])
 def test_filter_boost_percentage_accepted(populated_index, boost):
     """query must accept filter_boost_percentage values across the valid range."""
@@ -320,6 +327,7 @@ def test_filter_boost_results_still_satisfy_filter(populated_index):
 
 # === prefilter_cardinality_threshold ===
 
+
 @pytest.mark.parametrize("threshold", [1_000, 5_000, 10_000, 100_000, 1_000_000])
 def test_prefilter_threshold_accepted(populated_index, threshold):
     """query must accept prefilter_cardinality_threshold values across the valid range."""
@@ -347,6 +355,7 @@ def test_prefilter_threshold_results_satisfy_filter(populated_index):
 
 
 # === Both tuning params together ===
+
 
 def test_filter_both_tuning_params_together(populated_index):
     """Supplying both filter_boost_percentage and prefilter_cardinality_threshold together must work correctly."""

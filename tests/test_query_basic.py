@@ -17,6 +17,7 @@ from helpers import DIM, N_VECTORS, dense_vec
 
 # === Result structure ===
 
+
 def test_query_returns_list(populated_index):
     """query must return a list."""
     _, index = populated_index
@@ -68,7 +69,9 @@ def test_query_results_ordered_by_descending_similarity(populated_index):
     _, index = populated_index
     results = index.query(vector=dense_vec(), top_k=10)
     sims = [r["similarity"] for r in results]
-    assert sims == sorted(sims, reverse=True), "Results not sorted by descending similarity"
+    assert sims == sorted(sims, reverse=True), (
+        "Results not sorted by descending similarity"
+    )
 
 
 def test_query_meta_is_dict(populated_index):
@@ -86,6 +89,7 @@ def test_query_norm_positive(populated_index):
 
 
 # === top_k variations ===
+
 
 @pytest.mark.parametrize("top_k", [1, 5, 10, 20, 30, 50])
 def test_query_top_k_returns_at_most_k_results(populated_index, top_k):
@@ -114,6 +118,7 @@ def test_query_top_k_equals_n_returns_all_vectors(populated_index):
 
 # === ef (search quality) parameter ===
 
+
 @pytest.mark.parametrize("ef", [32, 64, 128, 256, 512, 1024])
 def test_query_ef_parameter_accepted(populated_index, ef):
     """query must accept the ef parameter without error."""
@@ -123,6 +128,7 @@ def test_query_ef_parameter_accepted(populated_index, ef):
 
 
 # === include_vectors flag ===
+
 
 def test_query_include_vectors_false_returns_empty_vector(populated_index):
     """include_vectors=False must return an empty list in the vector field of each result."""
@@ -143,6 +149,7 @@ def test_query_include_vectors_true_returns_vector_data(populated_index):
 
 # === filter key presence in results ===
 
+
 def test_query_filter_field_present_when_upserted(populated_index):
     """Vectors upserted with filter= should return that field in results."""
     _, index = populated_index
@@ -153,6 +160,7 @@ def test_query_filter_field_present_when_upserted(populated_index):
 
 
 # === meta content round-trip ===
+
 
 def test_query_meta_content_round_trips(empty_index):
     """Meta inserted during upsert must be returned intact in query results."""
