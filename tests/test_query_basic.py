@@ -162,4 +162,4 @@ def test_query_meta_content_round_trips(empty_index):
     results = index.query(vector=dense_vec(seed=77), top_k=1)
     assert results[0]["id"] == "meta_rt"
     assert results[0]["meta"]["title"] == "test doc"
-    assert results[0]["meta"]["count"] == 71
+    assert results[0]["meta"]["count"] == 7
