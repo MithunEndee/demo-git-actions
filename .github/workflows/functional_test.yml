@@ -21,6 +21,9 @@ name: Functional Tests
 # =============================================================================
 
 on:
+  pull_request:
+    branches:
+      - main  # Triggers automatically when a PR targets the main branch
   workflow_dispatch:
     inputs:
       token:
