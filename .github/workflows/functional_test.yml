@@ -43,6 +43,12 @@ jobs:
     name: Endee Functional Tests
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      issues: read
+      checks: write
+      pull-requests: write
+
     steps:
       - name: Detect run mode
         id: mode
