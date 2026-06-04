@@ -112,7 +112,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install pytest pytest-html pytest-timeout numpy pytest-github-actions-annotate-failures
+          pip install pytest pytest-html pytest-timeout numpy
 
       - name: Verify server connectivity
         env:
@@ -237,6 +237,12 @@ jobs:
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
+
+      - name: Publish Test Results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()  # Crucial: forces this to run even if pytest fails
+        with:
+          files: test-results.xml
 
       - name: Upload test artifacts
         if: always()
