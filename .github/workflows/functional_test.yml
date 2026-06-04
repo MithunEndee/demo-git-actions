@@ -166,20 +166,25 @@ jobs:
       #  Visible at: Actions, run page, Summary tab
       - name: Write test summary
         if: always()
+        env:
+          # Pull the mode from the first step and expose it to Python
+          RUN_MODE: ${{ steps.mode.outputs.mode }}
         run: |
           python - <<'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
 
           summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          # Grab the variables and format the commit hash to a standard 7-character short SHA
+          run_mode   = os.environ.get("RUN_MODE", "unknown").upper()
+          commit_sha = os.environ.get("GITHUB_SHA", "unknown")[:7]
+
           if not summary_file:
               print("GITHUB_STEP_SUMMARY not set - skipping summary")
               sys.exit(0)
 
           def write_out(content):
-              # Write to the GitHub Actions UI Summary
               with open(summary_file, "a") as f:
                   f.write(content)
-              # Write to a local file for the PR comment
               with open("pr-comment.md", "w") as f:
                   f.write(content)
 
@@ -196,13 +201,15 @@ jobs:
               skipped  = int(suite.get("skipped",  0))
               passed   = total - failures - errors - skipped
               elapsed  = float(suite.get("time",   0))
-              bad      = failures + errors
 
               mins, secs = divmod(int(elapsed), 60)
               duration = f"{mins}m {secs}s" if mins else f"{secs}s"
 
+              # Professional, emoji-free header with metadata
               lines = [
-                  f"## Endee - Functional Test Report",
+                  "## Endee Functional Test Report",
+                  "",
+                  f"**Mode:** {run_mode} &nbsp;|&nbsp; **Commit:** `{commit_sha}` &nbsp;|&nbsp; **Duration:** {duration}",
                   "",
                   "| Result  | Count |",
                   "|---------|------:|",
@@ -211,8 +218,6 @@ jobs:
                   f"| Errors  | {errors} |",
                   f"| Skipped | {skipped} |",
                   f"| **Total** | **{total}** |",
-                  "",
-                  f"**Duration:** {duration}",
                   "",
               ]
 
@@ -228,8 +233,8 @@ jobs:
 
               if failed_cases:
                   lines += [
-                      f"<details>",
-                      f"<summary>Failed tests ({len(failed_cases)})</summary>",
+                      "<details>",
+                      f"<summary><strong>Failed tests ({len(failed_cases)})</strong></summary>",
                       "",
                       "| Test | Reason |",
                       "|------|--------|",
