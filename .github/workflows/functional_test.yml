@@ -244,14 +244,12 @@ jobs:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
 
-      - name: Publish Test Results
-        uses: mikepenz/action-junit-report@v4
-        if: always()  # Crucial: forces this to run even if pytest fails
-        with:
-          # files: test-results.xml
-          report_paths: '**/test-results.xml'
-          detailed_summary: true
-          include_passed: true
+      - name: Post Test Summary to PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} -F $GITHUB_STEP_SUMMARY
 
       - name: Upload test artifacts
         if: always()
