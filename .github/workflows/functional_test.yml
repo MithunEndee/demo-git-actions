@@ -167,7 +167,6 @@ jobs:
       - name: Write test summary
         if: always()
         env:
-          # Pull context from GitHub and the earlier 'mode' step
           RUN_MODE: ${{ steps.mode.outputs.mode }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -209,7 +208,7 @@ jobs:
 
               # Professional metadata header
               lines = [
-                  "## Endee - Functional Test Report",
+                  "## Endee - Test Report",
                   "",
                   f"**Mode:** `{run_mode}` | **Commit:** `{commit_sha}` | **[View Action Logs]({run_url})**",
                   "",
@@ -251,7 +250,7 @@ jobs:
               print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
-              write_out(f"## Functional Test Report\n\n**Mode:** `{run_mode}` | **Commit:** `{commit_sha}`\n\n`test-results.xml` not found — pytest may not have run.\n")
+              write_out(f"## Test Report\n\n**Mode:** `{run_mode}` | **Commit:** `{commit_sha}`\n\n`test-results.xml` not found — pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
