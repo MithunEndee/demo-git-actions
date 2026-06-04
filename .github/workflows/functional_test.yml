@@ -245,7 +245,7 @@ jobs:
           PYEOF
 
       - name: Publish Test Results
-        uses: EnricoMi/publish-unit-test-result-action@v2
+        uses: mikepenz/action-junit-report@v4
         if: always()  # Crucial: forces this to run even if pytest fails
         with:
           files: test-results.xml
