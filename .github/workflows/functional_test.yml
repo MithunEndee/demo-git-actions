@@ -154,8 +154,7 @@ jobs:
             -p no:warnings \
             --junit-xml=test-results.xml \
             --html=test-report.html \
-            --self-contained-html \
-            2>&1 | tee test-output.txt
+            --self-contained-html
 
       # === Write test summary to the Actions run page ===
       #  Visible at: Actions, run page, Summary tab
@@ -247,7 +246,6 @@ jobs:
           path: |
             test-report.html
             test-results.xml
-            test-output.txt
           retention-days: 30
 
       - name: "[OSS] Print server logs on failure"
