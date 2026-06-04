@@ -55,17 +55,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # === OSS: start the Endee server ===
-      #
-      #  Official pre-built Docker image: endeeio/endee-server
-      #    https://hub.docker.com/r/endeeio/endee-server
-      #
-      #  Runtime flags:
-      #    --ulimit nofile=100000:100000  required by the server (high fd limit)
-      #    -p 8080:8080                  default port
-      #    NDD_AUTH_TOKEN=""             empty value disables authentication
-      #    NDD_NUM_THREADS=2             limits CPU usage on the CI runner
-      #
       - name: "[OSS] Pull Endee server image"
         if: steps.mode.outputs.mode == 'oss'
         run: docker pull endeeio/endee-server:latest
