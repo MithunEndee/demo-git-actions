@@ -208,7 +208,7 @@ jobs:
 
               # Professional metadata header
               lines = [
-                  "## Endee - Test Report",
+                  "## Endee Client Test Report",
                   "",
                   f"**Mode:** `{run_mode}` | **Commit:** `{commit_sha}` | **[View Action Logs]({run_url})**",
                   "",
