@@ -21,6 +21,9 @@ name: Functional Tests
 # =============================================================================
 
 on:
+  pull_request:
+    branches:
+      - main  # Triggers automatically when a PR targets the main branch
   workflow_dispatch:
     inputs:
       token:
@@ -39,6 +42,12 @@ jobs:
   functional-test:
     name: Endee Functional Tests
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      issues: read
+      checks: write
+      pull-requests: write
 
     steps:
       - name: Detect run mode
@@ -151,21 +160,34 @@ jobs:
             -p no:warnings \
             --junit-xml=test-results.xml \
             --html=test-report.html \
-            --self-contained-html \
-            2>&1 | tee test-output.txt
+            --self-contained-html
 
       # === Write test summary to the Actions run page ===
       #  Visible at: Actions, run page, Summary tab
       - name: Write test summary
         if: always()
+        env:
+          RUN_MODE: ${{ steps.mode.outputs.mode }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
 
           summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          run_mode     = os.environ.get("RUN_MODE", "unknown").upper()
+          commit_sha   = os.environ.get("COMMIT_SHA", "unknown")[:7]
+          run_url      = os.environ.get("RUN_URL", "")
+
           if not summary_file:
               print("GITHUB_STEP_SUMMARY not set - skipping summary")
               sys.exit(0)
+
+          def write_out(content):
+              with open(summary_file, "a") as f:
+                  f.write(content)
+              with open("pr-comment.md", "w") as f:
+                  f.write(content)
 
           try:
               tree = ET.parse("test-results.xml")
@@ -180,13 +202,15 @@ jobs:
               skipped  = int(suite.get("skipped",  0))
               passed   = total - failures - errors - skipped
               elapsed  = float(suite.get("time",   0))
-              bad      = failures + errors
 
               mins, secs = divmod(int(elapsed), 60)
               duration = f"{mins}m {secs}s" if mins else f"{secs}s"
 
+              # Professional metadata header
               lines = [
-                  f"## Endee - Functional Test Report",
+                  "## Endee Client Test Report",
+                  "",
+                  f"**Mode:** `{run_mode}` | **Commit:** `{commit_sha}` | **[View Action Logs]({run_url})**",
                   "",
                   "| Result  | Count |",
                   "|---------|------:|",
@@ -194,13 +218,12 @@ jobs:
                   f"| Failed  | {failures} |",
                   f"| Errors  | {errors} |",
                   f"| Skipped | {skipped} |",
-                  f"| **Total**   | **{total}** |",
+                  f"| **Total** | **{total}** |",
                   "",
                   f"**Duration:** {duration}",
                   "",
               ]
 
-              # Collect every failed / errored test case with full message
               failed_cases = []
               for tc in suite.iter("testcase"):
                   for tag in ("failure", "error"):
@@ -213,7 +236,7 @@ jobs:
 
               if failed_cases:
                   lines += [
-                      f"<details>",
+                      "<details>",
                       f"<summary>Failed tests ({len(failed_cases)})</summary>",
                       "",
                       "| Test | Reason |",
@@ -223,18 +246,25 @@ jobs:
                       lines.append(f"| `{classname}::{name}` | {msg} |")
                   lines += ["", "</details>", ""]
 
-              with open(summary_file, "a") as f:
-                  f.write("\n".join(lines) + "\n")
-
+              write_out("\n".join(lines) + "\n")
               print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
-              with open(summary_file, "a") as f:
-                  f.write("## Functional Test Results\n\n"
-                          "test-results.xml not found — pytest may not have run.\n")
+              write_out(f"## Test Report\n\n**Mode:** `{run_mode}` | **Commit:** `{commit_sha}`\n\n`test-results.xml` not found — pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
+
+      - name: Post Test Summary to PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -s pr-comment.md ]; then
+            gh pr comment ${{ github.event.pull_request.number }} -F pr-comment.md
+          else
+            echo "Comment file is empty or missing. Skipping PR comment."
+          fi
 
       - name: Upload test artifacts
         if: always()
@@ -244,7 +274,6 @@ jobs:
           path: |
             test-report.html
             test-results.xml
-            test-output.txt
           retention-days: 30
 
       - name: "[OSS] Print server logs on failure"
