@@ -175,6 +175,14 @@ jobs:
               print("GITHUB_STEP_SUMMARY not set - skipping summary")
               sys.exit(0)
 
+          def write_out(content):
+              # Write to the GitHub Actions UI Summary
+              with open(summary_file, "a") as f:
+                  f.write(content)
+              # Write to a local file for the PR comment
+              with open("pr-comment.md", "w") as f:
+                  f.write(content)
+
           try:
               tree = ET.parse("test-results.xml")
               root = tree.getroot()
@@ -202,13 +210,12 @@ jobs:
                   f"| Failed  | {failures} |",
                   f"| Errors  | {errors} |",
                   f"| Skipped | {skipped} |",
-                  f"| **Total**   | **{total}** |",
+                  f"| **Total** | **{total}** |",
                   "",
                   f"**Duration:** {duration}",
                   "",
               ]
 
-              # Collect every failed / errored test case with full message
               failed_cases = []
               for tc in suite.iter("testcase"):
                   for tag in ("failure", "error"):
@@ -231,15 +238,11 @@ jobs:
                       lines.append(f"| `{classname}::{name}` | {msg} |")
                   lines += ["", "</details>", ""]
 
-              with open(summary_file, "a") as f:
-                  f.write("\n".join(lines) + "\n")
-
+              write_out("\n".join(lines) + "\n")
               print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
-              with open(summary_file, "a") as f:
-                  f.write("## Functional Test Results\n\n"
-                          "test-results.xml not found — pytest may not have run.\n")
+              write_out("## Functional Test Results\n\ntest-results.xml not found — pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
@@ -249,7 +252,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr comment ${{ github.event.pull_request.number }} -F $GITHUB_STEP_SUMMARY
+          if [ -s pr-comment.md ]; then
+            gh pr comment ${{ github.event.pull_request.number }} -F pr-comment.md
+          else
+            echo "Comment file is empty or missing. Skipping PR comment."
+          fi
 
       - name: Upload test artifacts
         if: always()
