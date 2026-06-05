@@ -15,7 +15,7 @@ with open("README.md", encoding="utf-8") as f:
 setup(
     # Package Metadata
     name="endee",
-    version="0.1.27b1",
+    version="0.1.27",
     author="",
     author_email="",
     description=(
