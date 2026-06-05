@@ -274,7 +274,7 @@ jobs:
           path: |
             test-report.html
             test-results.xml
-          retention-days: 30
+          retention-days: 7
 
       - name: "[OSS] Print server logs on failure"
         if: steps.mode.outputs.mode == 'oss' && failure()
