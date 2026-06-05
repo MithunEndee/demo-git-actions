@@ -53,7 +53,7 @@ LOCAL_BASE_URL = "http://127.0.0.1:8080/api/v1"
 MAX_DIMENSION_ALLOWED = 8000
 
 # Maximum number of vectors that can be inserted in a single batch operation
-MAX_VECTORS_PER_BATCH = 1000
+MAX_VECTORS_PER_BATCH = 10000
 
 # Maximum number of nearest neighbors (top-k) that can be retrieved
 MAX_TOP_K_ALLOWED = 4096
