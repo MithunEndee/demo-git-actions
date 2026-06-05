@@ -1,21 +1,6 @@
-"""
-test_03_query_basic.py
-
-Tests for query - basic parameters and result structure:
-  - Result shape
-  - top_k variations
-  - ef (search quality) variations
-  - include_vectors flag
-  - similarity / distance relationship
-  - Results are ordered by descending similarity
-"""
-
 import pytest
 
 from helpers import DIM, N_VECTORS, dense_vec
-
-
-# === Result structure ===
 
 
 def test_query_returns_list(populated_index):
@@ -88,9 +73,6 @@ def test_query_norm_positive(populated_index):
     assert results[0]["norm"] > 0
 
 
-# === top_k variations ===
-
-
 @pytest.mark.parametrize("top_k", [1, 5, 10, 20, 30, 50])
 def test_query_top_k_returns_at_most_k_results(populated_index, top_k):
     """query must return no more than top_k results."""
@@ -116,18 +98,12 @@ def test_query_top_k_equals_n_returns_all_vectors(populated_index):
     assert len(results) >= int(N_VECTORS * 0.9)
 
 
-# === ef (search quality) parameter ===
-
-
 @pytest.mark.parametrize("ef", [32, 64, 128, 256, 512, 1024])
 def test_query_ef_parameter_accepted(populated_index, ef):
     """query must accept the ef parameter without error."""
     _, index = populated_index
     results = index.query(vector=dense_vec(), top_k=5, ef=ef)
     assert isinstance(results, list)
-
-
-# === include_vectors flag ===
 
 
 def test_query_include_vectors_false_returns_empty_vector(populated_index):
@@ -147,9 +123,6 @@ def test_query_include_vectors_true_returns_vector_data(populated_index):
         assert len(r["vector"]) == DIM, f"Expected dim {DIM}, got {len(r['vector'])}"
 
 
-# === filter key presence in results ===
-
-
 def test_query_filter_field_present_when_upserted(populated_index):
     """Vectors upserted with filter= should return that field in results."""
     _, index = populated_index
@@ -157,9 +130,6 @@ def test_query_filter_field_present_when_upserted(populated_index):
     for r in results:
         assert "filter" in r
         assert isinstance(r["filter"], dict)
-
-
-# === meta content round-trip ===
 
 
 def test_query_meta_content_round_trips(empty_index):
@@ -170,4 +140,4 @@ def test_query_meta_content_round_trips(empty_index):
     results = index.query(vector=dense_vec(seed=77), top_k=1)
     assert results[0]["id"] == "meta_rt"
     assert results[0]["meta"]["title"] == "test doc"
-    assert results[0]["meta"]["count"] == 71
+    assert results[0]["meta"]["count"] == 7

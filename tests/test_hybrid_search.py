@@ -1,24 +1,3 @@
-"""
-test_05_hybrid_search.py
-
-Tests for hybrid (dense + sparse) search:
-  - Upsert hybrid vectors
-  - Dense-only query on hybrid index
-  - Sparse-only query on hybrid index
-  - Full hybrid query (dense + sparse)
-  - Hybrid query result structure and ordering
-  - top_k and ef parameter variations
-  - Hybrid query with filter ($eq, $in, $range)
-  - filter_boost_percentage on hybrid index
-  - RRF weight variations (dense_rrf_weight)
-  - rrf_rank_constant variations
-  - include_vectors on hybrid index
-  - get_vector: sparse data, id, meta, filter, norm, dense vector
-  - update_filters on hybrid index
-  - delete_vector on hybrid index
-  - delete_with_filter on hybrid index ($eq, $range, $in)
-"""
-
 import pytest
 
 from endee.exceptions import NotFoundException
@@ -30,9 +9,6 @@ from helpers import (
     make_item,
     sparse_vec,
 )
-
-
-# === Upsert ===
 
 
 def test_hybrid_upsert_succeeds(empty_hybrid_index):
@@ -81,9 +57,6 @@ def test_hybrid_upsert_batch(empty_hybrid_index):
     assert "success" in result.lower()
 
 
-# === Dense-only query on hybrid index ===
-
-
 def test_hybrid_dense_only_query(populated_hybrid_index):
     """Hybrid index accepts a query with only dense vector (no sparse)."""
     _, index = populated_hybrid_index
@@ -101,9 +74,6 @@ def test_hybrid_dense_only_result_structure(populated_hybrid_index):
         assert key in r
 
 
-# === Sparse-only query on hybrid index ===
-
-
 def test_hybrid_sparse_only_query(populated_hybrid_index):
     """Query with only sparse_indices/values, no dense vector."""
     _, index = populated_hybrid_index
@@ -111,9 +81,6 @@ def test_hybrid_sparse_only_query(populated_hybrid_index):
     results = index.query(sparse_indices=si, sparse_values=sv, top_k=5)
     assert isinstance(results, list)
     assert len(results) > 0
-
-
-# === Full hybrid query ===
 
 
 def test_hybrid_full_query(populated_hybrid_index):
@@ -142,9 +109,6 @@ def test_hybrid_query_results_ordered_by_similarity(populated_hybrid_index):
     )
     sims = [r["similarity"] for r in results]
     assert sims == sorted(sims, reverse=True)
-
-
-# === Hybrid query with filter ===
 
 
 def test_hybrid_query_with_eq_filter(populated_hybrid_index):
@@ -179,9 +143,6 @@ def test_hybrid_query_with_range_filter(populated_hybrid_index):
     assert len(results) == 11
     for r in results:
         assert 10 <= r["filter"]["score"] <= 20
-
-
-# === RRF weight variations ===
 
 
 @pytest.mark.parametrize("weight", [0.0, 0.2, 0.5, 0.7, 1.0])
@@ -227,9 +188,6 @@ def test_hybrid_rrf_weight_1_emphasises_dense(populated_hybrid_index):
     assert len(results) > 0
 
 
-# === rrf_rank_constant variations ===
-
-
 @pytest.mark.parametrize("rrc", [1, 10, 30, 60, 120, 200])
 def test_hybrid_rrf_rank_constant_accepted(populated_hybrid_index, rrc):
     """All valid rrf_rank_constant values must be accepted without error."""
@@ -243,9 +201,6 @@ def test_hybrid_rrf_rank_constant_accepted(populated_hybrid_index, rrc):
         rrf_rank_constant=rrc,
     )
     assert isinstance(results, list)
-
-
-# === include_vectors on hybrid index ===
 
 
 def test_hybrid_include_vectors_true(populated_hybrid_index):
@@ -277,9 +232,6 @@ def test_hybrid_include_vectors_false(populated_hybrid_index):
     )
     for r in results:
         assert r["vector"] == []
-
-
-# === get_vector on hybrid index returns sparse data ===
 
 
 def test_hybrid_get_vector_has_sparse_keys(populated_hybrid_index):
@@ -353,9 +305,6 @@ def test_hybrid_get_vector_has_dense_vector(populated_hybrid_index):
     assert len(vec["vector"]) == HYBRID_DIM
 
 
-# === Query result structure ===
-
-
 def test_hybrid_query_result_has_required_keys(populated_hybrid_index):
     """Hybrid query results must contain all required response keys."""
     _, index = populated_hybrid_index
@@ -396,9 +345,6 @@ def test_hybrid_query_distance_equals_one_minus_similarity(populated_hybrid_inde
     )
     for r in results:
         assert abs(r["distance"] - (1.0 - r["similarity"])) < 1e-5
-
-
-# === top_k and ef variations ===
 
 
 @pytest.mark.parametrize("top_k", [1, 5, 10, 20, 30, 50])
@@ -443,9 +389,6 @@ def test_hybrid_query_ef_parameter_accepted(populated_hybrid_index, ef):
     assert isinstance(results, list)
 
 
-# === $in and additional filter operators on hybrid index ===
-
-
 def test_hybrid_query_with_in_filter(populated_hybrid_index):
     """Hybrid query with a $in filter must return only vectors matching one of the listed values."""
     _, index = populated_hybrid_index
@@ -484,9 +427,6 @@ def test_hybrid_query_with_combined_filters(populated_hybrid_index):
         assert r["filter"]["tags"] == "important"
 
 
-# === filter_boost_percentage on hybrid index ===
-
-
 @pytest.mark.parametrize("boost", [0, 10, 25, 50, 100, 200, 400])
 def test_hybrid_filter_boost_percentage_accepted(populated_hybrid_index, boost):
     """All valid filter_boost_percentage values must be accepted by a hybrid query."""
@@ -518,9 +458,6 @@ def test_hybrid_filter_boost_results_satisfy_filter(populated_hybrid_index):
     )
     for r in results:
         assert r["filter"]["tags"] == "important"
-
-
-# === update_filters on hybrid index ===
 
 
 def test_hybrid_update_filters_single_vector(populated_hybrid_index):
@@ -555,9 +492,6 @@ def test_hybrid_update_filters_reflected_in_get_vector(populated_hybrid_index):
     assert vec["filter"]["category"] == "UPDATED"
 
 
-# === delete_vector on hybrid index ===
-
-
 def test_hybrid_delete_vector_returns_deleted(populated_hybrid_index):
     """delete_vector on a hybrid index must return a response containing 'deleted'."""
     _, index = populated_hybrid_index
@@ -586,9 +520,6 @@ def test_hybrid_delete_vector_not_in_query_results(populated_hybrid_index):
         top_k=N_VECTORS,
     )
     assert target_id not in {r["id"] for r in results}
-
-
-# === delete_with_filter on hybrid index ===
 
 
 def test_hybrid_delete_with_filter_eq(empty_hybrid_index):

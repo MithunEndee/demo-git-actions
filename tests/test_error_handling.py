@@ -1,13 +1,3 @@
-"""
-test_06_error_handling.py
-
-Tests for error handling and validation:
-  - Client-side validation errors (ValueError from Pydantic)
-  - Server-side errors (ConflictException, NotFoundException, APIException)
-  - Constraint violations (batch size, dimension mismatch, sparse/dense mismatch)
-  - Filter key/value size limits
-"""
-
 import pytest
 
 from endee import Endee, Precision
@@ -18,9 +8,6 @@ from endee.exceptions import (
 )
 
 from helpers import DIM, HYBRID_DIM, dense_vec, safe_delete, sparse_vec, uid
-
-
-# === Index name validation (client-side, ValueError) ===
 
 
 @pytest.mark.parametrize(
@@ -56,9 +43,6 @@ def test_create_index_name_max_length_ok(client):
         safe_delete(client, name)
 
 
-# === space_type validation ===
-
-
 @pytest.mark.parametrize("bad_type", ["euclidean", "dot", ""])
 def test_create_index_invalid_space_type_raises(client, bad_type):
     """create_index with an unsupported space_type must raise ValueError."""
@@ -71,9 +55,6 @@ def test_create_index_invalid_space_type_raises(client, bad_type):
         )
 
 
-# === precision validation ===
-
-
 @pytest.mark.parametrize("bad_prec", ["fp32", "int4", "uint8", "half", ""])
 def test_create_index_invalid_precision_raises(client, bad_prec):
     """create_index with an unrecognised precision string must raise ValueError."""
@@ -84,9 +65,6 @@ def test_create_index_invalid_precision_raises(client, bad_prec):
             space_type="cosine",
             precision=bad_prec,
         )
-
-
-# === dimension bounds ===
 
 
 def test_create_index_dim_1_raises(client):
@@ -130,9 +108,6 @@ def test_create_index_dim_8000_is_valid(client):
         safe_delete(client, name)
 
 
-# === Duplicate index (server-side ConflictException) ===
-
-
 def test_create_duplicate_index_raises_conflict(client):
     """Creating an index with an already-existing name must raise ConflictException."""
     name = uid("dup")
@@ -148,9 +123,6 @@ def test_create_duplicate_index_raises_conflict(client):
         safe_delete(client, name)
 
 
-# === Non-existent index (server-side NotFoundException) ===
-
-
 def test_get_nonexistent_index_raises_not_found(client):
     """get_index for an index that does not exist must raise NotFoundException."""
     with pytest.raises(NotFoundException):
@@ -161,9 +133,6 @@ def test_delete_nonexistent_index_raises_not_found(client):
     """delete_index for an index that does not exist must raise NotFoundException."""
     with pytest.raises(NotFoundException):
         client.delete_index("nonexistent_xyz789")
-
-
-# === upsert: dimension mismatch ===
 
 
 def test_upsert_wrong_dimension_raises(empty_index):
@@ -181,9 +150,6 @@ def test_upsert_too_few_dimensions_raises(empty_index):
         index.upsert([{"id": "short", "vector": dense_vec(dim=DIM - 1)}])
 
 
-# === upsert: duplicate IDs in single batch ===
-
-
 def test_upsert_duplicate_ids_in_batch_raises(empty_index):
     """Upserting a batch containing duplicate IDs must raise ValueError."""
     _, index = empty_index
@@ -194,9 +160,6 @@ def test_upsert_duplicate_ids_in_batch_raises(empty_index):
                 {"id": "same_id", "vector": dense_vec()},
             ]
         )
-
-
-# === upsert: batch size limit ===
 
 
 def test_upsert_over_1000_raises(empty_index):
@@ -213,9 +176,6 @@ def test_upsert_exactly_1000_is_ok(empty_index):
     batch = [{"id": f"b{i:04d}", "vector": dense_vec(seed=i)} for i in range(1000)]
     result = index.upsert(batch)
     assert "success" in result.lower()
-
-
-# === upsert: sparse data on dense-only index ===
 
 
 def test_upsert_sparse_on_dense_index_raises(empty_index):
@@ -235,17 +195,11 @@ def test_upsert_sparse_on_dense_index_raises(empty_index):
         )
 
 
-# === upsert: dense without sparse on hybrid index ===
-
-
 def test_upsert_dense_without_sparse_on_hybrid_raises(empty_hybrid_index):
     """Upserting only a dense vector into a hybrid index (no sparse data) must raise ValueError."""
     _, index = empty_hybrid_index
     with pytest.raises(ValueError):
         index.upsert([{"id": "d1", "vector": dense_vec(HYBRID_DIM)}])
-
-
-# === upsert: sparse_indices / sparse_values length mismatch ===
 
 
 def test_upsert_sparse_length_mismatch_raises(empty_hybrid_index):
@@ -265,17 +219,11 @@ def test_upsert_sparse_length_mismatch_raises(empty_hybrid_index):
         )
 
 
-# === query: wrong dimension ===
-
-
 def test_query_wrong_dimension_raises(populated_index):
     """Querying with a vector of the wrong dimension must raise an error."""
     _, index = populated_index
     with pytest.raises((ValueError, EndeeException)):
         index.query(vector=dense_vec(dim=DIM + 2), top_k=5)
-
-
-# === query: sparse on dense-only index ===
 
 
 def test_query_sparse_on_dense_index_raises(populated_index):
@@ -286,17 +234,11 @@ def test_query_sparse_on_dense_index_raises(populated_index):
         index.query(sparse_indices=si, sparse_values=sv, top_k=5)
 
 
-# === query: no vector and no sparse provided ===
-
-
 def test_query_no_vector_no_sparse_raises(populated_index):
     """Calling query with neither a dense vector nor sparse inputs must raise ValueError."""
     _, index = populated_index
     with pytest.raises(ValueError):
         index.query(top_k=5)
-
-
-# === query: top_k bounds ===
 
 
 def test_query_top_k_0_raises(populated_index):
@@ -313,17 +255,11 @@ def test_query_top_k_over_4096_raises(populated_index):
         index.query(vector=dense_vec(), top_k=4097)
 
 
-# === query: ef bounds ===
-
-
 def test_query_ef_over_1024_raises(populated_index):
     """query with ef above the 1024 maximum must raise ValueError."""
     _, index = populated_index
     with pytest.raises(ValueError):
         index.query(vector=dense_vec(), top_k=5, ef=1025)
-
-
-# === query: filter_boost_percentage bounds ===
 
 
 def test_query_filter_boost_over_400_raises(populated_index):
@@ -338,9 +274,6 @@ def test_query_filter_boost_negative_raises(populated_index):
     _, index = populated_index
     with pytest.raises(ValueError):
         index.query(vector=dense_vec(), top_k=5, filter_boost_percentage=-1)
-
-
-# === query: prefilter_cardinality_threshold bounds ===
 
 
 def test_query_prefilter_below_1000_raises(populated_index):
@@ -359,9 +292,6 @@ def test_query_prefilter_over_1000000_raises(populated_index):
         )
 
 
-# === query: dense_rrf_weight bounds ===
-
-
 def test_query_rrf_weight_negative_raises(populated_index):
     """query with a negative dense_rrf_weight must raise ValueError."""
     _, index = populated_index
@@ -374,9 +304,6 @@ def test_query_rrf_weight_over_1_raises(populated_index):
     _, index = populated_index
     with pytest.raises(ValueError):
         index.query(vector=dense_vec(), top_k=5, dense_rrf_weight=1.1)
-
-
-# === Filter key / value size limits ===
 
 
 def test_upsert_filter_key_too_long_raises(empty_index):
@@ -411,9 +338,6 @@ def test_upsert_filter_value_too_long_raises(empty_index):
         )
 
 
-# === sparse_model validation ===
-
-
 def test_create_index_invalid_sparse_model_raises(client):
     """create_index with an unrecognised sparse_model value must raise ValueError."""
     with pytest.raises(ValueError):
@@ -426,16 +350,10 @@ def test_create_index_invalid_sparse_model_raises(client):
         )
 
 
-# === HTTP library: unsupported library raises at init ===
-
-
 def test_unsupported_http_library_raises():
     """Instantiating Endee with an unsupported http_library name must raise ValueError."""
     with pytest.raises(ValueError, match="[Uu]nsupported"):
         Endee(http_library="curl")
-
-
-# === VectorItem: empty ID raises ===
 
 
 def test_upsert_empty_id_raises(empty_index):

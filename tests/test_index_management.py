@@ -1,23 +1,9 @@
-"""
-test_01_index_management.py
-
-Tests for index lifecycle:
-  - create_index  (all precision and space_type combinations, custom HNSW params,
-                   hybrid indexes, duplicate detection)
-  - list_indexes
-  - get_index     (attribute verification)
-  - describe()
-  - delete_index
-"""
-
 import pytest
 
 from endee import Precision
 
 from helpers import DIM, HYBRID_DIM, get_index_names, safe_delete, uid
 
-
-# === Parametrised: all precision types and all space types ===
 
 ALL_PRECISIONS = [
     Precision.FLOAT32,
@@ -51,9 +37,6 @@ def test_create_index_precision_space_combinations(client, precision, space_type
         safe_delete(client, name)
 
 
-# === Custom HNSW parameters ===
-
-
 @pytest.mark.parametrize(
     "M,ef_con",
     [
@@ -84,9 +67,6 @@ def test_create_index_custom_hnsw_params(client, M, ef_con):
         safe_delete(client, name)
 
 
-# === Various dimensions ===
-
-
 @pytest.mark.parametrize("dimension", [2, 8, 64, 128, 512])
 def test_create_index_various_dimensions(client, dimension):
     """Index creation with a range of valid dimension values."""
@@ -102,9 +82,6 @@ def test_create_index_various_dimensions(client, dimension):
         assert index.dimension == dimension
     finally:
         safe_delete(client, name)
-
-
-# === Hybrid index creation ===
 
 
 def test_create_hybrid_index_default_sparse(client):
@@ -144,9 +121,6 @@ def test_create_hybrid_index_bm25(client):
         safe_delete(client, name)
 
 
-# === list_indexes ===
-
-
 def test_list_indexes_returns_list(client):
     """list_indexes must return a list."""
     names = get_index_names(client)
@@ -177,9 +151,6 @@ def test_list_indexes_does_not_contain_deleted_index(client):
     assert name not in names
 
 
-# === get_index – attribute verification ===
-
-
 def test_get_index_attributes_match_creation(client):
     """get_index must return an object whose attributes match the creation parameters."""
     name = uid("attrs")
@@ -202,9 +173,6 @@ def test_get_index_attributes_match_creation(client):
         assert index.is_hybrid is False
     finally:
         safe_delete(client, name)
-
-
-# === describe() ===
 
 
 def test_describe_returns_expected_keys(empty_index):
@@ -249,9 +217,6 @@ def test_describe_values_match_creation(client):
         assert info["is_hybrid"] is False
     finally:
         safe_delete(client, name)
-
-
-# === delete_index ===
 
 
 def test_delete_index_returns_success_message(client):

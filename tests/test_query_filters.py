@@ -1,39 +1,9 @@
-"""
-test_04_query_filters.py
-
-Tests for filtered queries:
-  - $eq  operator
-  - $in  operator
-  - $range operator
-  - Combined filters (AND logic)
-  - filter_boost_percentage
-  - prefilter_cardinality_threshold
-  - Both tuning params together
-
-Filter layout in populated_index (N=50 vectors):
-  category : "A"|"B"|"C"   (i%3)
-  priority : 0-4           (i%5)
-  score    : 0-49          (i itself)
-  tags     : "important"|"normal"  (even/odd i)
-
-Expected match counts (used in assertions):
-  category "A"            → 17
-  category "B"            → 17
-  category "C"            → 16
-  tags "important"        → 25
-  score in [10,20]        → 11
-  category in ["A","B"]   → 34
-"""
-
 import pytest
 
 from helpers import N_VECTORS, dense_vec
 
 # Use high prefilter threshold to guarantee brute-force recall in all filter tests
 _BF = 1_000_000
-
-
-# === $eq operator ===
 
 
 def test_filter_eq_all_results_match(populated_index):
@@ -104,9 +74,6 @@ def test_filter_eq_no_match_returns_empty(populated_index):
     assert len(results) == 0
 
 
-# === $in operator ===
-
-
 def test_filter_in_single_value(populated_index):
     """$in filter with a single value must behave like $eq for that value."""
     _, index = populated_index
@@ -157,9 +124,6 @@ def test_filter_in_tags(populated_index):
         prefilter_cardinality_threshold=_BF,
     )
     assert len(results) == N_VECTORS
-
-
-# === $range operator ===
 
 
 def test_filter_range_returns_correct_count(populated_index):
@@ -214,9 +178,6 @@ def test_filter_range_narrow(populated_index):
     )
     assert len(results) == 1
     assert results[0]["id"] == "vec_0025"
-
-
-# === Combined filters (AND logic) ===
 
 
 def test_filter_and_eq_and_eq(populated_index):
@@ -295,9 +256,6 @@ def test_filter_three_conditions(populated_index):
         assert r["filter"]["score"] <= 29
 
 
-# === filter_boost_percentage ===
-
-
 @pytest.mark.parametrize("boost", [0, 10, 25, 50, 100, 200, 400])
 def test_filter_boost_percentage_accepted(populated_index, boost):
     """query must accept filter_boost_percentage values across the valid range."""
@@ -325,9 +283,6 @@ def test_filter_boost_results_still_satisfy_filter(populated_index):
         assert r["filter"]["tags"] == "important"
 
 
-# === prefilter_cardinality_threshold ===
-
-
 @pytest.mark.parametrize("threshold", [1_000, 5_000, 10_000, 100_000, 1_000_000])
 def test_prefilter_threshold_accepted(populated_index, threshold):
     """query must accept prefilter_cardinality_threshold values across the valid range."""
@@ -352,9 +307,6 @@ def test_prefilter_threshold_results_satisfy_filter(populated_index):
     )
     for r in results:
         assert r["filter"]["category"] == "B"
-
-
-# === Both tuning params together ===
 
 
 def test_filter_both_tuning_params_together(populated_index):

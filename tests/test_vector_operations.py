@@ -1,14 +1,3 @@
-"""
-test_02_vector_operations.py
-
-Tests for vector CRUD operations:
-  - upsert  (single, batch, with/without meta+filter, update via re-insert)
-  - get_vector
-  - update_filters
-  - delete_vector (by ID)
-  - delete_with_filter
-"""
-
 import pytest
 
 from helpers import (
@@ -17,9 +6,6 @@ from helpers import (
     dense_vec,
     uid,
 )
-
-
-# === upsert ===
 
 
 def test_upsert_single_vector(empty_index):
@@ -153,9 +139,6 @@ def test_upsert_all_space_type_indexes(client):
             safe_delete(client, name)
 
 
-# === get_vector ===
-
-
 def test_get_vector_returns_correct_structure(populated_index):
     """get_vector must return a dict containing all required keys."""
     _, index = populated_index
@@ -206,9 +189,6 @@ def test_get_vector_norm_is_positive(populated_index):
     assert vec["norm"] > 0
 
 
-# === update_filters ===
-
-
 def test_update_filters_single_vector(populated_index):
     """update_filters on a single vector must return a non-empty confirmation."""
     _, index = populated_index
@@ -241,9 +221,6 @@ def test_update_filters_reflected_in_get_vector(populated_index):
     assert vec["filter"]["category"] == "UPDATED"
 
 
-# === delete_vector (by ID) ===
-
-
 def test_delete_vector_returns_rows_deleted(populated_index):
     """delete_vector must return a response confirming rows were deleted."""
     _, index = populated_index
@@ -269,9 +246,6 @@ def test_delete_vector_not_in_query_results(populated_index):
     results = index.query(vector=query_vec, top_k=N_VECTORS)
     returned_ids = {r["id"] for r in results}
     assert target_id not in returned_ids
-
-
-# === delete_with_filter ===
 
 
 def test_delete_with_filter_eq(empty_index, client):
