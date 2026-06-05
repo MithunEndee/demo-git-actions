@@ -162,11 +162,11 @@ def test_upsert_duplicate_ids_in_batch_raises(empty_index):
         )
 
 
-def test_upsert_over_1000_raises(empty_index):
-    """Upserting a batch of more than 1000 vectors must raise ValueError."""
+def test_upsert_over_10000_raises(empty_index):
+    """Upserting a batch of more than 10000 vectors must raise ValueError."""
     _, index = empty_index
-    big_batch = [{"id": f"x{i}", "vector": dense_vec()} for i in range(1001)]
-    with pytest.raises(ValueError, match="1000"):
+    big_batch = [{"id": f"x{i}", "vector": dense_vec()} for i in range(10001)]
+    with pytest.raises(ValueError, match="10000"):
         index.upsert(big_batch)
 
 
