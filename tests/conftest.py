@@ -6,6 +6,7 @@ Environment variables:
   ENDEE_BASE_URL - Override base URL (e.g. http://0.0.0.0:8080/api/v1)
 """
 
+import re
 import os
 import pytest
 
@@ -14,10 +15,35 @@ from helpers import (
     DIM,
     HYBRID_DIM,
     N_VECTORS,
+    get_index_names,
     make_item,
     safe_delete,
     uid,
 )
+
+
+_TEST_INDEX_PATTERN = re.compile(r"^[a-z]+_[0-9a-f]{10}$")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def verify_server_and_cleanup():
+    """Fail fast if the server is unreachable, then remove stale test indexes."""
+    token = os.environ.get("ENDEE_TOKEN") or None
+    base_url = os.environ.get("ENDEE_BASE_URL") or None
+    c = Endee(token=token)
+    if base_url:
+        c.set_base_url(base_url)
+
+    try:
+        existing = get_index_names(c)
+    except Exception as e:
+        pytest.exit(f"Server unreachable — aborting test session: {e}", returncode=1)
+
+    stale = [n for n in existing if _TEST_INDEX_PATTERN.match(n)]
+    for name in stale:
+        safe_delete(c, name)
+
+    yield
 
 
 @pytest.fixture(scope="session")

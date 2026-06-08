@@ -1,5 +1,7 @@
 import pytest
 
+from endee.exceptions import NotFoundException
+
 from helpers import (
     DIM,
     N_VECTORS,
@@ -232,7 +234,7 @@ def test_delete_vector_not_returned_in_get_vector(populated_index):
     """After deletion, get_vector should raise an exception."""
     _, index = populated_index
     index.delete_vector("vec_0041")
-    with pytest.raises(Exception):
+    with pytest.raises(NotFoundException):
         index.get_vector("vec_0041")
 
 

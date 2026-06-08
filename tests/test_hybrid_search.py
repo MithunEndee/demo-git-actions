@@ -53,8 +53,6 @@ def test_hybrid_upsert_with_meta_and_filter(empty_hybrid_index):
 def test_hybrid_upsert_batch(empty_hybrid_index):
     """Upserting a batch of hybrid vectors must return a success response."""
     _, index = empty_hybrid_index
-    from helpers import make_item
-
     batch = [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(20)]
     result = index.upsert(batch)
     assert "success" in result.lower()
