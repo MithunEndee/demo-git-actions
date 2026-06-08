@@ -1,5 +1,5 @@
 """
-Shared constants and helper functions for integration tests.
+Shared constants and helper functions for the tests.
 
 Import this module directly in test files:
     from helpers import DIM, uid, dense_vec, ...

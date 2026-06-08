@@ -1,5 +1,6 @@
 import pytest
 
+from endee import Precision
 from endee.exceptions import NotFoundException
 
 from helpers import (
@@ -7,7 +8,9 @@ from helpers import (
     N_VECTORS,
     dense_vec,
     make_item,
+    safe_delete,
     sparse_vec,
+    uid,
 )
 
 
@@ -577,3 +580,319 @@ def test_hybrid_delete_with_filter_in(empty_hybrid_index):
         else:
             vec = index.get_vector(f"vec_{i:04d}")
             assert vec["id"] == f"vec_{i:04d}"
+
+
+# === Hybrid index creation combinations ===
+
+
+HYBRID_PRECISIONS = [
+    Precision.FLOAT32,
+    Precision.FLOAT16,
+    Precision.INT16,
+    Precision.INT8,
+    Precision.BINARY2,
+]
+
+HYBRID_SPACE_TYPES = ["cosine", "l2", "ip"]
+
+
+@pytest.mark.parametrize("space_type", HYBRID_SPACE_TYPES)
+@pytest.mark.parametrize("precision", HYBRID_PRECISIONS)
+def test_hybrid_index_creation_precision_space_combinations(client, precision, space_type):
+    """Every valid (precision, space_type) pair must create a hybrid index successfully."""
+    name = uid("hcombo")
+    try:
+        result = client.create_index(
+            name=name,
+            dimension=HYBRID_DIM,
+            space_type=space_type,
+            precision=precision,
+            sparse_model="default",
+        )
+        assert "success" in result.lower()
+    finally:
+        safe_delete(client, name)
+
+
+@pytest.mark.parametrize("dim", [8, 32, 64, 128, 256])
+def test_hybrid_index_creation_various_dimensions(client, dim):
+    """Hybrid index creation must succeed for a range of valid dimensions."""
+    name = uid("hdim")
+    try:
+        result = client.create_index(
+            name=name,
+            dimension=dim,
+            space_type="cosine",
+            precision=Precision.INT8,
+            sparse_model="default",
+        )
+        assert "success" in result.lower()
+    finally:
+        safe_delete(client, name)
+
+
+def test_hybrid_index_appears_in_list_after_creation(client):
+    """A newly created hybrid index must appear in list_indexes."""
+    from helpers import get_index_names
+
+    name = uid("hlist")
+    try:
+        client.create_index(
+            name=name,
+            dimension=HYBRID_DIM,
+            space_type="cosine",
+            precision=Precision.INT8,
+            sparse_model="default",
+        )
+        names = get_index_names(client)
+        assert name in names
+    finally:
+        safe_delete(client, name)
+
+
+def test_hybrid_index_get_index_after_creation(client):
+    """get_index must return an index object for a newly created hybrid index."""
+    name = uid("hget")
+    try:
+        client.create_index(
+            name=name,
+            dimension=HYBRID_DIM,
+            space_type="cosine",
+            precision=Precision.INT8,
+            sparse_model="default",
+        )
+        index = client.get_index(name)
+        assert index is not None
+    finally:
+        safe_delete(client, name)
+
+
+# === Upsert edge cases ===
+
+
+def test_hybrid_upsert_exactly_1000_vectors(empty_hybrid_index):
+    """Upserting exactly 1000 hybrid vectors (the batch limit) must succeed."""
+    _, index = empty_hybrid_index
+    batch = [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(1000)]
+    result = index.upsert(batch)
+    assert "success" in result.lower()
+
+
+@pytest.mark.parametrize("batch_size", [1, 10, 100, 500, 999])
+def test_hybrid_upsert_various_batch_sizes(empty_hybrid_index, batch_size):
+    """Hybrid upsert must succeed for a range of valid batch sizes."""
+    _, index = empty_hybrid_index
+    batch = [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(batch_size)]
+    result = index.upsert(batch)
+    assert "success" in result.lower()
+
+
+def test_hybrid_upsert_single_sparse_nonzero_element(empty_hybrid_index):
+    """Upserting a hybrid vector with a single sparse non-zero element must succeed."""
+    _, index = empty_hybrid_index
+    result = index.upsert(
+        [
+            {
+                "id": "single_sparse",
+                "vector": dense_vec(HYBRID_DIM, seed=200),
+                "sparse_indices": [7],
+                "sparse_values": [0.99],
+            }
+        ]
+    )
+    assert "success" in result.lower()
+
+
+def test_hybrid_upsert_overwrite_updates_vector(empty_hybrid_index):
+    """Re-upserting the same ID with a different dense vector must overwrite the stored vector."""
+    _, index = empty_hybrid_index
+    si, sv = sparse_vec(seed=300)
+    index.upsert(
+        [{"id": "ow1", "vector": dense_vec(HYBRID_DIM, seed=300), "sparse_indices": si, "sparse_values": sv}]
+    )
+    new_vec = dense_vec(HYBRID_DIM, seed=301)
+    index.upsert(
+        [{"id": "ow1", "vector": new_vec, "sparse_indices": si, "sparse_values": sv}]
+    )
+    stored = index.get_vector("ow1")
+    assert stored["vector"] == pytest.approx(new_vec, abs=1e-4)
+
+
+def test_hybrid_upsert_overwrite_updates_sparse(empty_hybrid_index):
+    """Re-upserting the same ID with different sparse data must overwrite sparse fields."""
+    _, index = empty_hybrid_index
+    si1, sv1 = sparse_vec(seed=310)
+    si2, sv2 = sparse_vec(seed=311)
+    index.upsert(
+        [{"id": "ow2", "vector": dense_vec(HYBRID_DIM, seed=310), "sparse_indices": si1, "sparse_values": sv1}]
+    )
+    index.upsert(
+        [{"id": "ow2", "vector": dense_vec(HYBRID_DIM, seed=310), "sparse_indices": si2, "sparse_values": sv2}]
+    )
+    stored = index.get_vector("ow2")
+    assert stored["sparse_indices"] == si2
+    assert stored["sparse_values"] == pytest.approx(sv2, abs=1e-4)
+
+
+def test_hybrid_upsert_overwrite_updates_meta(empty_hybrid_index):
+    """Re-upserting the same ID with different meta must overwrite the stored meta."""
+    _, index = empty_hybrid_index
+    si, sv = sparse_vec(seed=320)
+    index.upsert(
+        [{"id": "ow3", "vector": dense_vec(HYBRID_DIM, seed=320), "sparse_indices": si, "sparse_values": sv, "meta": {"v": 1}}]
+    )
+    index.upsert(
+        [{"id": "ow3", "vector": dense_vec(HYBRID_DIM, seed=320), "sparse_indices": si, "sparse_values": sv, "meta": {"v": 2}}]
+    )
+    stored = index.get_vector("ow3")
+    assert stored["meta"]["v"] == 2
+
+
+# === Query edge cases ===
+
+
+def test_hybrid_query_empty_index_returns_empty_list(empty_hybrid_index):
+    """Querying an empty hybrid index must return an empty list."""
+    _, index = empty_hybrid_index
+    si, sv = sparse_vec(seed=400)
+    results = index.query(
+        vector=dense_vec(HYBRID_DIM, seed=400),
+        sparse_indices=si,
+        sparse_values=sv,
+        top_k=10,
+    )
+    assert results == []
+
+
+def test_hybrid_query_top_k_exceeds_corpus_returns_all(empty_hybrid_index):
+    """Query with top_k larger than the corpus size must return all indexed vectors."""
+    _, index = empty_hybrid_index
+    batch = [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(5)]
+    index.upsert(batch)
+    si, sv = sparse_vec(seed=401)
+    results = index.query(
+        vector=dense_vec(HYBRID_DIM, seed=401),
+        sparse_indices=si,
+        sparse_values=sv,
+        top_k=100,
+    )
+    assert len(results) <= 5
+
+
+def test_hybrid_meta_round_trip_in_query(empty_hybrid_index):
+    """Meta inserted via hybrid upsert must be returned intact in query results."""
+    _, index = empty_hybrid_index
+    payload = {"title": "hybrid doc", "count": 42, "active": True}
+    si, sv = sparse_vec(seed=410)
+    index.upsert(
+        [{"id": "meta_rt", "vector": dense_vec(HYBRID_DIM, seed=410), "sparse_indices": si, "sparse_values": sv, "meta": payload}]
+    )
+    results = index.query(
+        vector=dense_vec(HYBRID_DIM, seed=410),
+        sparse_indices=si,
+        sparse_values=sv,
+        top_k=1,
+    )
+    assert results[0]["id"] == "meta_rt"
+    assert results[0]["meta"]["title"] == "hybrid doc"
+    assert results[0]["meta"]["count"] == 42
+    assert results[0]["meta"]["active"] is True
+
+
+def test_hybrid_query_after_overwrite_reflects_new_meta(empty_hybrid_index):
+    """After overwriting a vector's meta, a query must return the updated meta."""
+    _, index = empty_hybrid_index
+    si, sv = sparse_vec(seed=420)
+    index.upsert(
+        [{"id": "upd_meta", "vector": dense_vec(HYBRID_DIM, seed=420), "sparse_indices": si, "sparse_values": sv, "meta": {"version": 1}}]
+    )
+    index.upsert(
+        [{"id": "upd_meta", "vector": dense_vec(HYBRID_DIM, seed=420), "sparse_indices": si, "sparse_values": sv, "meta": {"version": 2}}]
+    )
+    results = index.query(
+        vector=dense_vec(HYBRID_DIM, seed=420),
+        sparse_indices=si,
+        sparse_values=sv,
+        top_k=1,
+    )
+    assert results[0]["id"] == "upd_meta"
+    assert results[0]["meta"]["version"] == 2
+
+
+# === get_vector edge cases ===
+
+
+def test_hybrid_get_vector_nonexistent_raises_not_found(empty_hybrid_index):
+    """get_vector on a non-existent ID in a hybrid index must raise NotFoundException."""
+    _, index = empty_hybrid_index
+    with pytest.raises(NotFoundException):
+        index.get_vector("this_id_does_not_exist_xyz")
+
+
+# === update_filters reflected in filtered queries ===
+
+
+def test_hybrid_update_filters_reflected_in_filtered_query(empty_hybrid_index):
+    """Filters updated via update_filters must be returned in a subsequent filtered query."""
+    _, index = empty_hybrid_index
+    si, sv = sparse_vec(seed=500)
+    index.upsert(
+        [{"id": "uf_q1", "vector": dense_vec(HYBRID_DIM, seed=500), "sparse_indices": si, "sparse_values": sv, "filter": {"status": "old"}}]
+    )
+    index.update_filters([{"id": "uf_q1", "filter": {"status": "new"}}])
+    results = index.query(
+        vector=dense_vec(HYBRID_DIM, seed=500),
+        sparse_indices=si,
+        sparse_values=sv,
+        top_k=10,
+        filter=[{"status": {"$eq": "new"}}],
+        prefilter_cardinality_threshold=1_000_000,
+    )
+    ids = {r["id"] for r in results}
+    assert "uf_q1" in ids
+
+
+def test_hybrid_update_filters_old_filter_no_longer_matches(empty_hybrid_index):
+    """After updating a filter, the old filter value must no longer match in queries."""
+    _, index = empty_hybrid_index
+    si, sv = sparse_vec(seed=501)
+    index.upsert(
+        [{"id": "uf_q2", "vector": dense_vec(HYBRID_DIM, seed=501), "sparse_indices": si, "sparse_values": sv, "filter": {"status": "old"}}]
+    )
+    index.update_filters([{"id": "uf_q2", "filter": {"status": "new"}}])
+    results = index.query(
+        vector=dense_vec(HYBRID_DIM, seed=501),
+        sparse_indices=si,
+        sparse_values=sv,
+        top_k=10,
+        filter=[{"status": {"$eq": "old"}}],
+        prefilter_cardinality_threshold=1_000_000,
+    )
+    ids = {r["id"] for r in results}
+    assert "uf_q2" not in ids
+
+
+# === delete_with_filter: combined (AND) conditions ===
+
+
+def test_hybrid_delete_with_combined_and_filters(empty_hybrid_index):
+    """delete_with_filter with multiple conditions must delete only vectors satisfying all conditions."""
+    _, index = empty_hybrid_index
+    batch = [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(20)]
+    index.upsert(batch)
+
+    # Delete where category == "A" AND score <= 9  (i=0,3,6,9 → 4 vectors)
+    index.delete_with_filter([
+        {"category": {"$eq": "A"}},
+        {"score": {"$range": [0, 9]}},
+    ])
+
+    # i=0,3,6,9 match both conditions — must be deleted
+    for i in [0, 3, 6, 9]:
+        with pytest.raises(NotFoundException):
+            index.get_vector(f"vec_{i:04d}")
+
+    # i=1,2 (not category A) and i=12,15,18 (category A but score > 9) must survive
+    for i in [1, 2, 12, 15, 18]:
+        vec = index.get_vector(f"vec_{i:04d}")
+        assert vec["id"] == f"vec_{i:04d}"

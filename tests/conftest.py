@@ -1,5 +1,5 @@
 """
-Shared pytest fixtures for Endee integration tests.
+Shared pytest fixtures for Endee functional tests.
 
 Environment variables:
   ENDEE_TOKEN    - API token (omit for OSS/local mode)
