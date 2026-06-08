@@ -598,7 +598,9 @@ HYBRID_SPACE_TYPES = ["cosine", "l2", "ip"]
 
 @pytest.mark.parametrize("space_type", HYBRID_SPACE_TYPES)
 @pytest.mark.parametrize("precision", HYBRID_PRECISIONS)
-def test_hybrid_index_creation_precision_space_combinations(client, precision, space_type):
+def test_hybrid_index_creation_precision_space_combinations(
+    client, precision, space_type
+):
     """Every valid (precision, space_type) pair must create a hybrid index successfully."""
     name = uid("hcombo")
     try:
@@ -740,7 +742,15 @@ def test_hybrid_meta_round_trip_in_query(empty_hybrid_index):
     payload = {"title": "hybrid doc", "count": 42, "active": True}
     si, sv = sparse_vec(seed=410)
     index.upsert(
-        [{"id": "meta_rt", "vector": dense_vec(HYBRID_DIM, seed=410), "sparse_indices": si, "sparse_values": sv, "meta": payload}]
+        [
+            {
+                "id": "meta_rt",
+                "vector": dense_vec(HYBRID_DIM, seed=410),
+                "sparse_indices": si,
+                "sparse_values": sv,
+                "meta": payload,
+            }
+        ]
     )
     results = index.query(
         vector=dense_vec(HYBRID_DIM, seed=410),
@@ -759,10 +769,26 @@ def test_hybrid_query_after_overwrite_reflects_new_meta(empty_hybrid_index):
     _, index = empty_hybrid_index
     si, sv = sparse_vec(seed=420)
     index.upsert(
-        [{"id": "upd_meta", "vector": dense_vec(HYBRID_DIM, seed=420), "sparse_indices": si, "sparse_values": sv, "meta": {"version": 1}}]
+        [
+            {
+                "id": "upd_meta",
+                "vector": dense_vec(HYBRID_DIM, seed=420),
+                "sparse_indices": si,
+                "sparse_values": sv,
+                "meta": {"version": 1},
+            }
+        ]
     )
     index.upsert(
-        [{"id": "upd_meta", "vector": dense_vec(HYBRID_DIM, seed=420), "sparse_indices": si, "sparse_values": sv, "meta": {"version": 2}}]
+        [
+            {
+                "id": "upd_meta",
+                "vector": dense_vec(HYBRID_DIM, seed=420),
+                "sparse_indices": si,
+                "sparse_values": sv,
+                "meta": {"version": 2},
+            }
+        ]
     )
     results = index.query(
         vector=dense_vec(HYBRID_DIM, seed=420),
@@ -792,7 +818,15 @@ def test_hybrid_update_filters_reflected_in_filtered_query(empty_hybrid_index):
     _, index = empty_hybrid_index
     si, sv = sparse_vec(seed=500)
     index.upsert(
-        [{"id": "uf_q1", "vector": dense_vec(HYBRID_DIM, seed=500), "sparse_indices": si, "sparse_values": sv, "filter": {"status": "old"}}]
+        [
+            {
+                "id": "uf_q1",
+                "vector": dense_vec(HYBRID_DIM, seed=500),
+                "sparse_indices": si,
+                "sparse_values": sv,
+                "filter": {"status": "old"},
+            }
+        ]
     )
     index.update_filters([{"id": "uf_q1", "filter": {"status": "new"}}])
     results = index.query(
@@ -812,7 +846,15 @@ def test_hybrid_update_filters_old_filter_no_longer_matches(empty_hybrid_index):
     _, index = empty_hybrid_index
     si, sv = sparse_vec(seed=501)
     index.upsert(
-        [{"id": "uf_q2", "vector": dense_vec(HYBRID_DIM, seed=501), "sparse_indices": si, "sparse_values": sv, "filter": {"status": "old"}}]
+        [
+            {
+                "id": "uf_q2",
+                "vector": dense_vec(HYBRID_DIM, seed=501),
+                "sparse_indices": si,
+                "sparse_values": sv,
+                "filter": {"status": "old"},
+            }
+        ]
     )
     index.update_filters([{"id": "uf_q2", "filter": {"status": "new"}}])
     results = index.query(
@@ -837,10 +879,12 @@ def test_hybrid_delete_with_combined_and_filters(empty_hybrid_index):
     index.upsert(batch)
 
     # Delete where category == "A" AND score <= 9  (i=0,3,6,9 → 4 vectors)
-    index.delete_with_filter([
-        {"category": {"$eq": "A"}},
-        {"score": {"$range": [0, 9]}},
-    ])
+    index.delete_with_filter(
+        [
+            {"category": {"$eq": "A"}},
+            {"score": {"$range": [0, 9]}},
+        ]
+    )
 
     # i=0,3,6,9 match both conditions — must be deleted
     for i in [0, 3, 6, 9]:
