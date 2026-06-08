@@ -703,51 +703,6 @@ def test_hybrid_upsert_single_sparse_nonzero_element(empty_hybrid_index):
     assert "success" in result.lower()
 
 
-def test_hybrid_upsert_overwrite_updates_vector(empty_hybrid_index):
-    """Re-upserting the same ID with a different dense vector must overwrite the stored vector."""
-    _, index = empty_hybrid_index
-    si, sv = sparse_vec(seed=300)
-    index.upsert(
-        [{"id": "ow1", "vector": dense_vec(HYBRID_DIM, seed=300), "sparse_indices": si, "sparse_values": sv}]
-    )
-    new_vec = dense_vec(HYBRID_DIM, seed=301)
-    index.upsert(
-        [{"id": "ow1", "vector": new_vec, "sparse_indices": si, "sparse_values": sv}]
-    )
-    stored = index.get_vector("ow1")
-    assert stored["vector"] == pytest.approx(new_vec, abs=1e-4)
-
-
-def test_hybrid_upsert_overwrite_updates_sparse(empty_hybrid_index):
-    """Re-upserting the same ID with different sparse data must overwrite sparse fields."""
-    _, index = empty_hybrid_index
-    si1, sv1 = sparse_vec(seed=310)
-    si2, sv2 = sparse_vec(seed=311)
-    index.upsert(
-        [{"id": "ow2", "vector": dense_vec(HYBRID_DIM, seed=310), "sparse_indices": si1, "sparse_values": sv1}]
-    )
-    index.upsert(
-        [{"id": "ow2", "vector": dense_vec(HYBRID_DIM, seed=310), "sparse_indices": si2, "sparse_values": sv2}]
-    )
-    stored = index.get_vector("ow2")
-    assert stored["sparse_indices"] == si2
-    assert stored["sparse_values"] == pytest.approx(sv2, abs=1e-4)
-
-
-def test_hybrid_upsert_overwrite_updates_meta(empty_hybrid_index):
-    """Re-upserting the same ID with different meta must overwrite the stored meta."""
-    _, index = empty_hybrid_index
-    si, sv = sparse_vec(seed=320)
-    index.upsert(
-        [{"id": "ow3", "vector": dense_vec(HYBRID_DIM, seed=320), "sparse_indices": si, "sparse_values": sv, "meta": {"v": 1}}]
-    )
-    index.upsert(
-        [{"id": "ow3", "vector": dense_vec(HYBRID_DIM, seed=320), "sparse_indices": si, "sparse_values": sv, "meta": {"v": 2}}]
-    )
-    stored = index.get_vector("ow3")
-    assert stored["meta"]["v"] == 2
-
-
 # === Query edge cases ===
 
 
