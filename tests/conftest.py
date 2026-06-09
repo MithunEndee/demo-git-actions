@@ -29,7 +29,7 @@ def pytest_collection_modifyitems(items):
     """Auto-skip @pytest.mark.serverless tests when no API token is provided."""
     if os.environ.get("ENDEE_TOKEN"):
         return
-    skip = pytest.mark.skip(reason="Requires ENDEE_TOKEN — serverless only")
+    skip = pytest.mark.skip(reason="Requires ENDEE_TOKEN - serverless only")
     for item in items:
         if item.get_closest_marker("serverless"):
             item.add_marker(skip)
@@ -47,7 +47,7 @@ def verify_server_and_cleanup():
     try:
         existing = get_index_names(c)
     except Exception as e:
-        pytest.exit(f"Server unreachable — aborting test session: {e}", returncode=1)
+        pytest.exit(f"Server unreachable - aborting test session: {e}", returncode=1)
 
     stale = [n for n in existing if _TEST_INDEX_PATTERN.match(n)]
     for name in stale:

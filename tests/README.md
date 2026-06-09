@@ -1,7 +1,7 @@
 # Functional Tests
 
 End-to-end tests for the Endee Python client. Tests run against a live Endee
-Server — either the hosted cloud or a local OSS Docker container.
+Server - either the hosted cloud or a local OSS Docker container.
 
 ---
 
@@ -19,7 +19,7 @@ pip install endee
 pip install pytest pytest-html pytest-timeout numpy
 ```
 
-**OSS mode** (no token — spins up a local Docker container)
+**OSS mode** (no token - spins up a local Docker container)
 
 ```bash
 # Start the server
@@ -75,7 +75,7 @@ and JUnit XML are also uploaded as artifacts.
 | `test_query_filters.py` | `$eq`, `$in`, `$range` operators; combined filters; `filter_boost_percentage`; `prefilter_cardinality_threshold` |
 | `test_hybrid_search.py` | Dense-only, sparse-only, and full hybrid queries; result structure; `top_k`/`ef`; `$eq`/`$in`/`$range` filters; `filter_boost_percentage`; RRF weights; `get_vector`; `update_filters`; `delete_vector`; `delete_with_filter` |
 | `test_error_handling.py` | Client-side `ValueError` for invalid inputs; server-side `ConflictException` / `NotFoundException`; batch and dimension constraints |
-| `test_serverless.py` | **Serverless only** (`ENDEE_TOKEN` required — skipped in OSS mode). INT8E precision: index creation × all space types and dimensions; upsert; query; `get_vector`; `update_filters`; `delete_vector`; `delete_with_filter`. Rebuild: trigger, response shape, config changes, HNSW param combinations, `rebuild_status` polling. Token/auth: invalid token, empty token, `set_token`, `AuthenticationException` |
+| `test_serverless.py` | **Serverless only** (`ENDEE_TOKEN` required - skipped in OSS mode). INT8E precision: index creation × all space types and dimensions; upsert; query; `get_vector`; `update_filters`; `delete_vector`; `delete_with_filter`. Rebuild: trigger, response shape, config changes, HNSW param combinations, `rebuild_status` polling. Token/auth: invalid token, empty token, `set_token`, `AuthenticationException` |
 
 ---
 

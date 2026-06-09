@@ -884,7 +884,7 @@ def test_hybrid_delete_with_combined_and_filters(empty_hybrid_index):
         ]
     )
 
-    # i=0,3,6,9 match both conditions — must be deleted
+    # i=0,3,6,9 match both conditions - must be deleted
     for i in [0, 3, 6, 9]:
         with pytest.raises(NotFoundException):
             index.get_vector(f"vec_{i:04d}")

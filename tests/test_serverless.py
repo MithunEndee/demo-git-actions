@@ -501,7 +501,7 @@ def test_int8e_delete_with_filter_range(int8e_index):
 
 @pytest.fixture
 def rebuild_index(client):
-    """INT8E index with M=16, ef_con=128 and N_VECTORS populated — for rebuild tests."""
+    """INT8E index with M=16, ef_con=128 and N_VECTORS populated - for rebuild tests."""
     name = uid("reb")
     client.create_index(
         name=name,
@@ -665,7 +665,7 @@ def test_invalid_token_raises_authentication_error():
             base_url = f"https://{parts[2]}.endee.io/api/v1"
         else:
             pytest.skip(
-                "Cannot determine server URL — set ENDEE_BASE_URL to run this test"
+                "Cannot determine server URL - set ENDEE_BASE_URL to run this test"
             )
 
     bad_client = Endee(token="invalid_token_xyz_12345")
@@ -686,7 +686,7 @@ def test_empty_token_raises_authentication_error():
             base_url = f"https://{parts[2]}.endee.io/api/v1"
         else:
             pytest.skip(
-                "Cannot determine server URL — set ENDEE_BASE_URL to run this test"
+                "Cannot determine server URL - set ENDEE_BASE_URL to run this test"
             )
 
     bad_client = Endee(token="")
@@ -707,7 +707,7 @@ def test_set_token_to_invalid_causes_auth_error():
             base_url = f"https://{parts[2]}.endee.io/api/v1"
         else:
             pytest.skip(
-                "Cannot determine server URL — set ENDEE_BASE_URL to run this test"
+                "Cannot determine server URL - set ENDEE_BASE_URL to run this test"
             )
 
     c = Endee(token=os.environ.get("ENDEE_TOKEN"))

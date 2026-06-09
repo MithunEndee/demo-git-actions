@@ -57,7 +57,7 @@ def make_item(i: int, dim: int = DIM, with_sparse: bool = False) -> dict:
     Filter layout used by filter tests (N_VECTORS = 50):
       category : "A" | "B" | "C"    (i % 3)
       priority : 0..4               (i % 5)
-      score    : 0..49              (i itself — fits in $range [0,999])
+      score    : 0..49              (i itself - fits in $range [0,999])
       tags     : "important"|"normal"  (even/odd i)
 
     Expected counts with N_VECTORS = 50:

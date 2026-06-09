@@ -261,7 +261,7 @@ jobs:
 
                   if run_mode == "OSS":
                       lines += [
-                          f"> **{len(skipped_cases)} test(s) skipped** — no `ENDEE_TOKEN` provided.",
+                          f"> **{len(skipped_cases)} test(s) skipped** - no `ENDEE_TOKEN` provided.",
                           "> These are serverless-only tests. Re-run with a token to include them.",
                           "",
                       ]
@@ -283,7 +283,7 @@ jobs:
               print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
-              write_out(f"## Test Report\n\n**Mode:** `{run_mode}` | **Commit:** `{commit_sha}`\n\n`test-results.xml` not found — pytest may not have run.\n")
+              write_out(f"## Test Report\n\n**Mode:** `{run_mode}` | **Commit:** `{commit_sha}`\n\n`test-results.xml` not found - pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
