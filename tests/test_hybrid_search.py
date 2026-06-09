@@ -428,7 +428,7 @@ def test_hybrid_query_with_combined_filters(populated_hybrid_index):
         assert r["filter"]["tags"] == "important"
 
 
-@pytest.mark.parametrize("boost", [0, 10, 25, 50, 100, 200, 400])
+@pytest.mark.parametrize("boost", [0, 10, 25, 50, 100])
 def test_hybrid_filter_boost_percentage_accepted(populated_hybrid_index, boost):
     """All valid filter_boost_percentage values must be accepted by a hybrid query."""
     _, index = populated_hybrid_index

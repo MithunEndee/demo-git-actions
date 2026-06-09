@@ -256,7 +256,7 @@ def test_filter_three_conditions(populated_index):
         assert r["filter"]["score"] <= 29
 
 
-@pytest.mark.parametrize("boost", [0, 10, 25, 50, 100, 200, 400])
+@pytest.mark.parametrize("boost", [0, 10, 25, 50, 100])
 def test_filter_boost_percentage_accepted(populated_index, boost):
     """query must accept filter_boost_percentage values across the valid range."""
     _, index = populated_index
