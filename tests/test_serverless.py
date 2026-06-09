@@ -494,6 +494,30 @@ def test_int8e_delete_with_filter_range(int8e_index):
         assert vec["id"] == f"r{i:04d}"
 
 
+def test_int8e_delete_with_filter_in(int8e_index):
+    """delete_with_filter using $in must remove vectors matching any listed value from an INT8E index."""
+    _, index = int8e_index
+    tags = ["alpha", "beta", "gamma"]
+    batch = [
+        {
+            "id": f"in{i:04d}",
+            "vector": dense_vec(seed=i),
+            "filter": {"tag": tags[i % 3]},
+        }
+        for i in range(9)
+    ]
+    index.upsert(batch)
+    index.delete_with_filter([{"tag": {"$in": ["alpha", "beta"]}}])
+
+    for i in range(9):
+        if tags[i % 3] in ("alpha", "beta"):
+            with pytest.raises(NotFoundException):
+                index.get_vector(f"in{i:04d}")
+        else:
+            vec = index.get_vector(f"in{i:04d}")
+            assert vec["id"] == f"in{i:04d}"
+
+
 # ============================================================
 # Rebuild operations (serverless async rebuild)
 # ============================================================
