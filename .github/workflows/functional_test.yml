@@ -262,7 +262,7 @@ jobs:
                   if run_mode == "OSS":
                       lines += [
                           f"> **{len(skipped_cases)} test(s) skipped** — no `ENDEE_TOKEN` provided.",
-                          "> These are serverless/cloud-only tests. Re-run with a token to include them.",
+                          "> These are serverless-only tests. Re-run with a token to include them.",
                           "",
                       ]
 

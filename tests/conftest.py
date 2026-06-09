@@ -29,7 +29,7 @@ def pytest_collection_modifyitems(items):
     """Auto-skip @pytest.mark.serverless tests when no API token is provided."""
     if os.environ.get("ENDEE_TOKEN"):
         return
-    skip = pytest.mark.skip(reason="Requires ENDEE_TOKEN — serverless/cloud only")
+    skip = pytest.mark.skip(reason="Requires ENDEE_TOKEN — serverless only")
     for item in items:
         if item.get_closest_marker("serverless"):
             item.add_marker(skip)

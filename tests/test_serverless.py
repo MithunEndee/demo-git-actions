@@ -1,7 +1,7 @@
 """
 test_serverless.py
 
-Tests for Endee Serverless / cloud-only features.
+Tests for Endee Serverless-only features.
 Automatically skipped when ENDEE_TOKEN is not set (OSS mode).
 
 Currently covers:

@@ -20,7 +20,7 @@ class Precision(str, Enum):
         FLOAT32: 32-bit floating point
         INT16: 16-bit integer
         INT8: 8-bit integer
-        INT8E: Enhanced 8-bit integer (serverless/cloud only)
+        INT8E: Enhanced 8-bit integer (serverless only)
     """
 
     BINARY2 = "binary"
