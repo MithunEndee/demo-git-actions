@@ -55,13 +55,27 @@ pytest
 
 Trigger manually: **Actions → Functional Tests → Run workflow**
 
-| Input | Description |
-|-------|-------------|
-| `token` | API token from app.endee.io. Leave empty for OSS mode. |
-| `base_url` | Optional URL override. Defaults to cloud (from token) or `http://127.0.0.1:8080/api/v1` (OSS). |
+The workflow supports two modes determined by whether a token is provided.
 
-Results appear directly on the Actions run summary page. A full HTML report
-and JUnit XML are also uploaded as artifacts.
+**Serverless mode** (token provided)
+
+Provide an API token from the Endee Serverless. The client derives the correct
+API endpoint from the token automatically. Leave `base_url` empty.
+
+**OSS / self-hosted mode** (no token)
+
+Leave `token` empty. The workflow pulls `endeeio/endee-server:latest` and starts
+a local server on port 8080 with authentication disabled. `base_url` defaults to
+`http://127.0.0.1:8080/api/v1`. To target an already-running server on another
+host, set `base_url` (e.g. `http://0.0.0.0:8080/api/v1`) and leave `token` empty.
+
+| Input | Required | Description |
+|-------|----------|-------------|
+| `token` | No | Endee Serverless API token. Leave blank for OSS mode. |
+| `base_url` | No | API base URL override. Leave blank to use the mode default. |
+
+Results appear on the Actions run summary page and as a PR comment. A full HTML
+report and JUnit XML are uploaded as artifacts (retained for 7 days).
 
 ---
 

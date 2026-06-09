@@ -1,24 +1,7 @@
 name: Functional Tests
 
-# =============================================================================
-# HOW TO USE
-#
-# Trigger manually: GitHub Actions, Functional Tests, Run workflow
-#
-# SERVERLESS MODE  (token provided)
-#   Provide an API token from the Endee Serverless (Scale plan to test all features).
-#   The client derives the correct API endpoint from the token automatically.
-#   Leave base_url empty.
-#
-# OSS / SELF-HOSTED MODE  (no token)
-#   Leave token empty.
-#   The workflow pulls the official Docker image (endeeio/endee-server:latest)
-#   and starts a local server on port 8080 with authentication disabled.
-#   base_url defaults to http://127.0.0.1:8080/api/v1.
-#   To target an already-running server on another host, set base_url
-#   (e.g. http://0.0.0.0:8080/api/v1) and leave token empty.
-#
-# =============================================================================
+# Runs the Endee client functional test suite against OSS (Docker) or Serverless.
+# See tests/README.md for full usage details.
 
 on:
   pull_request:
