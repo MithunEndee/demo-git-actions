@@ -224,7 +224,8 @@ jobs:
                   "",
               ]
 
-              failed_cases = []
+              failed_cases  = []
+              skipped_cases = []
               for tc in suite.iter("testcase"):
                   for tag in ("failure", "error"):
                       node = tc.find(tag)
@@ -233,6 +234,12 @@ jobs:
                           classname = tc.get("classname", "")
                           msg       = (node.get("message") or node.text or "").strip().split("\n")[0][:200]
                           failed_cases.append((classname, name, msg))
+                  skip_node = tc.find("skipped")
+                  if skip_node is not None:
+                      name      = tc.get("name", "unknown")
+                      classname = tc.get("classname", "")
+                      reason    = (skip_node.get("message") or "No reason given").strip()
+                      skipped_cases.append((classname, name, reason))
 
               if failed_cases:
                   lines += [
@@ -245,6 +252,32 @@ jobs:
                   for classname, name, msg in failed_cases:
                       lines.append(f"| `{classname}::{name}` | {msg} |")
                   lines += ["", "</details>", ""]
+
+              if skipped_cases:
+                  from collections import defaultdict
+                  by_reason = defaultdict(list)
+                  for classname, name, reason in skipped_cases:
+                      by_reason[reason].append(f"`{classname}::{name}`")
+
+                  if run_mode == "OSS":
+                      lines += [
+                          f"> **{len(skipped_cases)} test(s) skipped** — no `ENDEE_TOKEN` provided.",
+                          "> These are serverless/cloud-only tests. Re-run with a token to include them.",
+                          "",
+                      ]
+
+                  lines += [
+                      "<details>",
+                      f"<summary>Skipped tests ({len(skipped_cases)})</summary>",
+                      "",
+                  ]
+                  for reason, names in by_reason.items():
+                      lines.append(f"**Reason:** {reason}")
+                      lines.append("")
+                      for n in names:
+                          lines.append(f"- {n}")
+                      lines.append("")
+                  lines += ["</details>", ""]
 
               write_out("\n".join(lines) + "\n")
               print(f"Summary written: {passed}/{total} passed in {duration}")
