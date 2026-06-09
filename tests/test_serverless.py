@@ -517,20 +517,13 @@ def rebuild_index(client):
     safe_delete(client, name)
 
 
-# Note: Added xfail to rebuild tests because the backend API is currently unstable/throwing 500s.
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_on_empty_index_raises_value_error(int8e_index):
     """rebuild on an empty index must raise ValueError."""
     _, index = int8e_index
     with pytest.raises(ValueError, match="[Ee]mpty|[Cc]annot"):
-        index.rebuild(M=16, ef_con=128)
+        index.rebuild()
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_returns_expected_keys(rebuild_index):
     """rebuild must return a dict with status, previous_config, new_config, total_vectors."""
     _, index = rebuild_index
@@ -539,9 +532,6 @@ def test_rebuild_returns_expected_keys(rebuild_index):
         assert key in result, f"Missing key '{key}' in rebuild response"
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_total_vectors_matches_index_count(rebuild_index):
     """total_vectors in the rebuild response must match N_VECTORS."""
     _, index = rebuild_index
@@ -549,9 +539,6 @@ def test_rebuild_total_vectors_matches_index_count(rebuild_index):
     assert result["total_vectors"] == N_VECTORS
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_previous_config_has_original_values(rebuild_index):
     """previous_config must reflect the M and ef_con the index was created with."""
     _, index = rebuild_index
@@ -560,9 +547,6 @@ def test_rebuild_previous_config_has_original_values(rebuild_index):
     assert result["previous_config"]["ef_con"] == 128
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_new_config_reflects_requested_m(rebuild_index):
     """new_config must reflect the M value passed to rebuild."""
     _, index = rebuild_index
@@ -570,9 +554,6 @@ def test_rebuild_new_config_reflects_requested_m(rebuild_index):
     assert result["new_config"]["M"] == 32
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_new_config_reflects_requested_ef_con(rebuild_index):
     """new_config must reflect the ef_con value passed to rebuild."""
     _, index = rebuild_index
@@ -580,9 +561,6 @@ def test_rebuild_new_config_reflects_requested_ef_con(rebuild_index):
     assert result["new_config"]["ef_con"] == 256
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_with_both_params(rebuild_index):
     """rebuild with both M and ef_con must succeed and reflect both in new_config."""
     _, index = rebuild_index
@@ -591,25 +569,22 @@ def test_rebuild_with_both_params(rebuild_index):
     assert result["new_config"]["ef_con"] == 256
 
 
-@pytest.mark.skip(
-    reason="Pydantic schema IndexRebuildRequest strictly requires both M and ef_con"
-)
 def test_rebuild_with_only_m(rebuild_index):
     """rebuild with only M specified must succeed."""
-    pass
+    _, index = rebuild_index
+    result = index.rebuild(M=24)
+    assert "status" in result
+    assert result["new_config"]["M"] == 24
 
 
-@pytest.mark.skip(
-    reason="Pydantic schema IndexRebuildRequest strictly requires both M and ef_con"
-)
 def test_rebuild_with_only_ef_con(rebuild_index):
     """rebuild with only ef_con specified must succeed."""
-    pass
+    _, index = rebuild_index
+    result = index.rebuild(ef_con=200)
+    assert "status" in result
+    assert result["new_config"]["ef_con"] == 200
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 @pytest.mark.parametrize("M,ef_con", [(4, 32), (8, 64), (32, 256), (64, 512)])
 def test_rebuild_various_hnsw_params(rebuild_index, M, ef_con):
     """rebuild must accept a range of valid M and ef_con combinations."""
@@ -622,9 +597,6 @@ def test_rebuild_various_hnsw_params(rebuild_index, M, ef_con):
 # === rebuild_status ===
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_status_returns_expected_keys(rebuild_index):
     """rebuild_status must return a dict containing the 'status' key."""
     _, index = rebuild_index
@@ -633,9 +605,6 @@ def test_rebuild_status_returns_expected_keys(rebuild_index):
     assert "status" in status
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_status_is_valid_value(rebuild_index):
     """The status field in rebuild_status must be one of the known valid values."""
     _, index = rebuild_index
@@ -644,9 +613,6 @@ def test_rebuild_status_is_valid_value(rebuild_index):
     assert status["status"] in ("in_progress", "completed", "failed", "idle")
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning App not found"
-)
 def test_rebuild_status_on_idle_index(int8e_index):
     """rebuild_status on an index with no active rebuild must return status='idle'."""
     _, index = int8e_index
@@ -655,9 +621,6 @@ def test_rebuild_status_on_idle_index(int8e_index):
     assert status["status"] == "idle"
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_status_has_progress_fields_when_active(rebuild_index):
     """rebuild_status during or after a rebuild must include progress tracking fields."""
     _, index = rebuild_index
@@ -669,9 +632,6 @@ def test_rebuild_status_has_progress_fields_when_active(rebuild_index):
         assert "percent_complete" in status
 
 
-@pytest.mark.xfail(
-    strict=False, reason="Backend rebuild API currently returning Unknown Error"
-)
 def test_rebuild_status_percent_complete_in_range(rebuild_index):
     """percent_complete in rebuild_status must be between 0.0 and 100.0."""
     _, index = rebuild_index
@@ -688,9 +648,9 @@ def test_rebuild_status_percent_complete_in_range(rebuild_index):
 
 def test_set_token_updates_stored_token():
     """set_token must update the token stored on the Endee client instance."""
-    c = Endee(token="user:region:original_token")
-    c.set_token("user:region:updated_token")
-    assert c.token == "user:region:updated_token"
+    c = Endee(token="original_token")
+    c.set_token("updated_token")
+    assert c.token == "updated_token"
 
 
 def test_invalid_token_raises_authentication_error():
@@ -708,7 +668,7 @@ def test_invalid_token_raises_authentication_error():
                 "Cannot determine server URL - set ENDEE_BASE_URL to run this test"
             )
 
-    bad_client = Endee(token="invalid_user:invalid_region:invalid_token_xyz_12345")
+    bad_client = Endee(token="invalid_token_xyz_12345")
     bad_client.set_base_url(base_url)
 
     with pytest.raises(AuthenticationException):
@@ -729,7 +689,7 @@ def test_empty_token_raises_authentication_error():
                 "Cannot determine server URL - set ENDEE_BASE_URL to run this test"
             )
 
-    bad_client = Endee(token="::")
+    bad_client = Endee(token="")
     bad_client.set_base_url(base_url)
 
     with pytest.raises(AuthenticationException):
@@ -752,7 +712,7 @@ def test_set_token_to_invalid_causes_auth_error():
 
     c = Endee(token=os.environ.get("ENDEE_TOKEN"))
     c.set_base_url(base_url)
-    c.set_token("invalid_user:invalid_region:now_invalid_token")
+    c.set_token("now_invalid_token")
 
     with pytest.raises(AuthenticationException):
         c.list_indexes()
