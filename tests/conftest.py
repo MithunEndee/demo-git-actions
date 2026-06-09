@@ -25,6 +25,16 @@ from helpers import (
 _TEST_INDEX_PATTERN = re.compile(r"^[a-z]+_[0-9a-f]{10}$")
 
 
+def pytest_collection_modifyitems(items):
+    """Auto-skip @pytest.mark.serverless tests when no API token is provided."""
+    if os.environ.get("ENDEE_TOKEN"):
+        return
+    skip = pytest.mark.skip(reason="Requires ENDEE_TOKEN — serverless/cloud only")
+    for item in items:
+        if item.get_closest_marker("serverless"):
+            item.add_marker(skip)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def verify_server_and_cleanup():
     """Fail fast if the server is unreachable, then remove stale test indexes."""
