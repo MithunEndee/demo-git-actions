@@ -199,7 +199,7 @@ def test_update_filters_single_vector(populated_index):
             {"id": "vec_0010", "filter": {"category": "Z", "score": 99}},
         ]
     )
-    assert result  # server returns a non-empty confirmation
+    assert result
 
 
 def test_update_filters_multiple_vectors(populated_index):
