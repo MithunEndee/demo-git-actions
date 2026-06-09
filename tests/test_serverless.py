@@ -673,10 +673,10 @@ def test_rebuild_status_percent_complete_in_range(rebuild_index):
 
 def test_set_token_updates_stored_token():
     """set_token must update the token stored on the Endee client instance."""
-    # Endee tokens expect a specific format: "user:region:endpoint".
-    c = Endee(token="user:region:original_token")
-    c.set_token("user:region:updated_token")
-    assert c.token == "user:region:updated_token"
+    # Endee tokens use the format "user:token:region".
+    c = Endee(token="user:original_token:region")
+    c.set_token("user:updated_token:region")
+    assert c.token == "user:updated_token:region"
 
 
 def test_invalid_token_raises_authentication_error():
@@ -684,7 +684,7 @@ def test_invalid_token_raises_authentication_error():
     base_url = os.environ.get("ENDEE_BASE_URL") or None
 
     if not base_url:
-        # Derive the endpoint from the valid token (format: user:region:endpoint)
+        # Derive the endpoint from the valid token (format: user:token:region)
         valid_token = os.environ.get("ENDEE_TOKEN", "")
         parts = valid_token.split(":")
         if len(parts) == 3:
@@ -738,8 +738,8 @@ def test_set_token_to_invalid_causes_auth_error():
 
     c = Endee(token=os.environ.get("ENDEE_TOKEN"))
     c.set_base_url(base_url)
-    # Token needs the right structural format to avoid IndexError on the region split
-    c.set_token("user:region:now_invalid_token")
+    # Token needs the right structural format (user:token:region) to avoid IndexError on the region split
+    c.set_token("user:now_invalid_token:region")
 
     with pytest.raises(AuthenticationException):
         c.list_indexes()
