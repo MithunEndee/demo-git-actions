@@ -1,24 +1,12 @@
-"""
-Shared constants and helper functions for integration tests.
-
-Import this module directly in test files:
-    from helpers import DIM, uid, dense_vec, ...
-
-Pytest fixtures should NOT be writtn here - those belong in conftest.py.
-"""
-
 import uuid
 import numpy as np
 
-# === Test-wide constants ===
-DIM = 16          # Dense vector dimension for most tests
-HYBRID_DIM = 16   # Dense dimension for hybrid tests
+DIM = 16  # Dense vector dimension for most tests
+HYBRID_DIM = 16  # Dense dimension for hybrid tests
 SPARSE_DIM = 500  # Vocabulary size for sparse vectors
-SPARSE_NNZ = 8    # Non-zero terms per sparse vector
-N_VECTORS = 50    # Vectors inserted per populated fixture
+SPARSE_NNZ = 8  # Non-zero terms per sparse vector
+N_VECTORS = 50  # Vectors inserted per populated fixture
 
-
-# === Vector / item generators ===
 
 def uid(prefix: str = "t") -> str:
     """Return a unique index name that fits inside the 48-char limit."""
@@ -56,7 +44,7 @@ def make_item(i: int, dim: int = DIM, with_sparse: bool = False) -> dict:
     Filter layout used by filter tests (N_VECTORS = 50):
       category : "A" | "B" | "C"    (i % 3)
       priority : 0..4               (i % 5)
-      score    : 0..49              (i itself — fits in $range [0,999])
+      score    : 0..49              (i itself - fits in $range [0,999])
       tags     : "important"|"normal"  (even/odd i)
 
     Expected counts with N_VECTORS = 50:

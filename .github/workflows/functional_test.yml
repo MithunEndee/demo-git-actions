@@ -1,24 +1,7 @@
 name: Functional Tests
 
-# =============================================================================
-# HOW TO USE
-#
-# Trigger manually: GitHub Actions, Functional Tests, Run workflow
-#
-# SERVERLESS MODE  (token provided)
-#   Provide an API token from the Endee Serverless (Scale plan to test all features).
-#   The client derives the correct API endpoint from the token automatically.
-#   Leave base_url empty.
-#
-# OSS / SELF-HOSTED MODE  (no token)
-#   Leave token empty.
-#   The workflow pulls the official Docker image (endeeio/endee-server:latest)
-#   and starts a local server on port 8080 with authentication disabled.
-#   base_url defaults to http://127.0.0.1:8080/api/v1.
-#   To target an already-running server on another host, set base_url
-#   (e.g. http://0.0.0.0:8080/api/v1) and leave token empty.
-#
-# =============================================================================
+# Runs the Endee client functional test suite against OSS (Docker) or Serverless.
+# See tests/README.md for full usage details.
 
 on:
   pull_request:
@@ -118,7 +101,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install pytest pytest-html pytest-timeout numpy
+          pip install pytest pytest-html pytest-timeout numpy pytest-github-actions-annotate-failures
 
       - name: Verify server connectivity
         env:
@@ -224,7 +207,8 @@ jobs:
                   "",
               ]
 
-              failed_cases = []
+              failed_cases  = []
+              skipped_cases = []
               for tc in suite.iter("testcase"):
                   for tag in ("failure", "error"):
                       node = tc.find(tag)
@@ -233,6 +217,12 @@ jobs:
                           classname = tc.get("classname", "")
                           msg       = (node.get("message") or node.text or "").strip().split("\n")[0][:200]
                           failed_cases.append((classname, name, msg))
+                  skip_node = tc.find("skipped")
+                  if skip_node is not None:
+                      name      = tc.get("name", "unknown")
+                      classname = tc.get("classname", "")
+                      reason    = (skip_node.get("message") or "No reason given").strip()
+                      skipped_cases.append((classname, name, reason))
 
               if failed_cases:
                   lines += [
@@ -246,11 +236,37 @@ jobs:
                       lines.append(f"| `{classname}::{name}` | {msg} |")
                   lines += ["", "</details>", ""]
 
+              if skipped_cases:
+                  from collections import defaultdict
+                  by_reason = defaultdict(list)
+                  for classname, name, reason in skipped_cases:
+                      by_reason[reason].append(f"`{classname}::{name}`")
+
+                  if run_mode == "OSS":
+                      lines += [
+                          f"> **{len(skipped_cases)} test(s) skipped** - no `ENDEE_TOKEN` provided.",
+                          "> These are serverless-only tests. Re-run with a token to include them.",
+                          "",
+                      ]
+
+                  lines += [
+                      "<details>",
+                      f"<summary>Skipped tests ({len(skipped_cases)})</summary>",
+                      "",
+                  ]
+                  for reason, names in by_reason.items():
+                      lines.append(f"**Reason:** {reason}")
+                      lines.append("")
+                      for n in names:
+                          lines.append(f"- {n}")
+                      lines.append("")
+                  lines += ["</details>", ""]
+
               write_out("\n".join(lines) + "\n")
               print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
-              write_out(f"## Test Report\n\n**Mode:** `{run_mode}` | **Commit:** `{commit_sha}`\n\n`test-results.xml` not found — pytest may not have run.\n")
+              write_out(f"## Test Report\n\n**Mode:** `{run_mode}` | **Commit:** `{commit_sha}`\n\n`test-results.xml` not found - pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
@@ -274,7 +290,7 @@ jobs:
           path: |
             test-report.html
             test-results.xml
-          retention-days: 30
+          retention-days: 7
 
       - name: "[OSS] Print server logs on failure"
         if: steps.mode.outputs.mode == 'oss' && failure()
