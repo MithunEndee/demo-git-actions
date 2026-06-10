@@ -30,7 +30,6 @@ def test_create_index_precision_space_combinations(client, precision, space_type
         )
         assert "success" in result.lower(), f"Unexpected response: {result}"
 
-        # Index must appear in list
         names = get_index_names(client)
         assert name in names, f"Index '{name}' missing from list_indexes"
     finally:

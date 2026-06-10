@@ -138,7 +138,7 @@ def test_delete_nonexistent_index_raises_not_found(client):
 def test_upsert_wrong_dimension_raises(empty_index):
     """Upserting a vector with more dimensions than the index must raise an error."""
     _, index = empty_index
-    wrong_dim_vec = dense_vec(dim=DIM + 1)  # one extra dimension
+    wrong_dim_vec = dense_vec(dim=DIM + 1)
     with pytest.raises((ValueError, EndeeException)):
         index.upsert([{"id": "bad", "vector": wrong_dim_vec}])
 

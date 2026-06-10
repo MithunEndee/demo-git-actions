@@ -69,10 +69,7 @@ def client() -> Endee:
 
 @pytest.fixture
 def empty_index(client):
-    """
-    Yield (name, index) for a fresh cosine + INT8 dense index.
-    Deleted on teardown even if the test raises.
-    """
+    """Yield (name, index) for a fresh cosine + INT8 dense index."""
     name = uid("t")
     client.create_index(
         name=name,
@@ -87,10 +84,7 @@ def empty_index(client):
 
 @pytest.fixture
 def populated_index(client, empty_index):
-    """
-    Yield (name, index) with N_VECTORS deterministic vectors already upserted.
-    Inherits teardown from empty_index.
-    """
+    """Yield (name, index) with N_VECTORS deterministic vectors already upserted."""
     name, index = empty_index
     index.upsert([make_item(i) for i in range(N_VECTORS)])
     yield name, index

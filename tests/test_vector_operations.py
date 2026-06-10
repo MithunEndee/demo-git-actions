@@ -1,11 +1,13 @@
 import pytest
 
+from endee import Precision
 from endee.exceptions import NotFoundException
 
 from helpers import (
     DIM,
     N_VECTORS,
     dense_vec,
+    safe_delete,
     uid,
 )
 
@@ -97,9 +99,6 @@ def test_upsert_overwrites_existing_id(empty_index):
 
 def test_upsert_all_precision_indexes(client):
     """Upsert vectors into indexes with different precision types."""
-    from endee import Precision
-    from helpers import safe_delete
-
     for precision in [
         Precision.FLOAT32,
         Precision.FLOAT16,
@@ -121,11 +120,7 @@ def test_upsert_all_precision_indexes(client):
 
 def test_upsert_all_space_type_indexes(client):
     """Upsert vectors into indexes with each space type."""
-    from helpers import safe_delete
-
     for space_type in ["cosine", "l2", "ip"]:
-        from endee import Precision
-
         name = uid("st")
         try:
             client.create_index(
@@ -253,7 +248,6 @@ def test_delete_vector_not_in_query_results(populated_index):
 def test_delete_with_filter_eq(empty_index, client):
     """delete_with_filter using $eq should remove matching vectors."""
     name, index = empty_index
-    # Insert 6 vectors: 3 with tag "to_delete", 3 with tag "keep"
     batch = [
         {
             "id": f"d_{i}",
@@ -265,7 +259,6 @@ def test_delete_with_filter_eq(empty_index, client):
     index.upsert(batch)
     index.delete_with_filter([{"tag": {"$eq": "to_delete"}}])
 
-    # "keep" vectors should still be queryable
     results = index.query(
         vector=dense_vec(),
         top_k=10,
@@ -276,7 +269,6 @@ def test_delete_with_filter_eq(empty_index, client):
     for i in range(3, 6):
         assert f"d_{i}" in returned_ids
 
-    # "to_delete" vectors should not appear at all
     all_results = index.query(vector=dense_vec(), top_k=10)
     all_ids = {r["id"] for r in all_results}
     for i in range(3):
@@ -285,23 +277,18 @@ def test_delete_with_filter_eq(empty_index, client):
 
 def test_delete_with_filter_range(empty_index):
     """delete_with_filter using $range removes vectors in score range."""
-    from endee.exceptions import NotFoundException
-
     _, index = empty_index
     batch = [
         {"id": f"r_{i}", "vector": dense_vec(seed=i), "filter": {"score": i}}
         for i in range(20)
     ]
     index.upsert(batch)
-    # Delete score in [5, 10]
     index.delete_with_filter([{"score": {"$range": [5, 10]}}])
 
-    # Scores 5-10 should be gone (get_vector raises NotFoundException)
     for i in range(5, 11):
         with pytest.raises(NotFoundException):
             index.get_vector(f"r_{i}")
 
-    # Scores outside the range should still exist
     for i in [0, 4, 11, 19]:
         vec = index.get_vector(f"r_{i}")
         assert vec["id"] == f"r_{i}"
@@ -316,7 +303,6 @@ def test_delete_with_filter_in(empty_index):
         for i in range(9)
     ]
     index.upsert(batch)
-    # Delete alpha and beta; keep gamma
     index.delete_with_filter([{"tag": {"$in": ["alpha", "beta"]}}])
 
     remaining = index.query(
