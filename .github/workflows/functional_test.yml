@@ -4,7 +4,6 @@ name: Functional Tests
 # See tests/README.md for full usage details.
 
 on:
-  # Uncomment to run automatically on pull requests targeting main or master.
   pull_request:
     branches:
       - main
