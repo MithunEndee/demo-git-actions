@@ -5,10 +5,10 @@ name: Functional Tests
 
 on:
   # Uncomment to run automatically on pull requests targeting main or master.
-  # pull_request:
-  #   branches:
-  #     - main
-  #     - master
+  pull_request:
+    branches:
+      - main
+      - master
   workflow_dispatch:
     inputs:
       token:
