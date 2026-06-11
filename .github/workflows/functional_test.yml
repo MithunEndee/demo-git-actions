@@ -17,7 +17,7 @@ on:
         type: string
 
       base_url:
-        description: "[OPTIONAL] API base URL override (e.g. http://0.0.0.0:8080/api/v1). Leave blank to derive from token."
+        description: "API base URL override (e.g. http://localhost:8080/api/v1). Leave blank to derive from token."
         required: false
         default: ""
         type: string
@@ -79,7 +79,6 @@ jobs:
           PYEOF
 
       - name: Run functional tests
-        id: pytest
         env:
           ENDEE_TOKEN:    ${{ inputs.token || secrets.ENDEE_TOKEN }}
           ENDEE_BASE_URL: ${{ inputs.base_url || secrets.ENDEE_BASE_URL }}

@@ -129,7 +129,7 @@ def test_filter_in_tags(populated_index):
 def test_filter_range_returns_correct_count(populated_index):
     """$range filter must return the expected number of matching vectors."""
     _, index = populated_index
-    # score in [10, 20] → i = 10..20 → 11 vectors
+    # score in [10, 20] -> i = 10..20 -> 11 vectors
     results = index.query(
         vector=dense_vec(),
         top_k=N_VECTORS,
@@ -169,7 +169,7 @@ def test_filter_range_full_span(populated_index):
 def test_filter_range_narrow(populated_index):
     """$range filter with identical bounds must return exactly one matching vector."""
     _, index = populated_index
-    # score in [25, 25] → only vec_0025
+    # score in [25, 25] -> only vec_0025
     results = index.query(
         vector=dense_vec(),
         top_k=N_VECTORS,
@@ -181,7 +181,7 @@ def test_filter_range_narrow(populated_index):
 
 
 def test_filter_and_eq_and_eq(populated_index):
-    """category='A' AND tags='important' → 9 vectors (i=0,6,12,18,24,30,36,42,48)."""
+    """category='A' AND tags='important' -> 9 vectors (i=0,6,12,18,24,30,36,42,48)."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -199,7 +199,7 @@ def test_filter_and_eq_and_eq(populated_index):
 
 
 def test_filter_and_eq_and_range(populated_index):
-    """category='A' AND score in [0,29] → i=0,3,6,...,27 → 10 vectors."""
+    """category='A' AND score in [0,29] -> i=0,3,6,...,27 -> 10 vectors."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -217,7 +217,7 @@ def test_filter_and_eq_and_range(populated_index):
 
 
 def test_filter_and_in_and_range(populated_index):
-    """category in ['A','B'] AND score in [0,9] → i=0..9 = 10 vectors."""
+    """category in ['A','B'] AND score in [0,9] -> i=0..9 = 10 vectors."""
     _, index = populated_index
     results = index.query(
         vector=dense_vec(),
@@ -248,7 +248,7 @@ def test_filter_three_conditions(populated_index):
         ],
         prefilter_cardinality_threshold=_BF,
     )
-    # i=0,6,12,18,24 → 5 vectors
+    # i=0,6,12,18,24 -> 5 vectors
     assert len(results) == 5
     for r in results:
         assert r["filter"]["category"] == "A"

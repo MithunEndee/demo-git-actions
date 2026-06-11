@@ -2,31 +2,51 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 --token <api_token> [--base-url <url>] [--clean] [-- <pytest args>]"
-  echo ""
-  echo "  --token      Endee Serverless API token (required)"
-  echo "  --base-url   Override API base URL (optional, derived from token if omitted)"
-  echo "  --clean      Delete and recreate the .venv before running"
-  echo "  --           Pass any additional pytest arguments after this"
-  echo ""
-  echo "Examples:"
-  echo "  $0 --token user:mytoken:us-east"
-  echo "  $0 --token user:mytoken:us-east --base-url http://0.0.0.0:8080/api/v1"
-  echo "  $0 --token user:mytoken:us-east --clean"
-  echo "  $0 --token user:mytoken:us-east -- -k test_query_basic -v"
+  cat <<EOF
+Usage: $0 --token <api_token> [--base-url <url>] [--clean] [-- <pytest args>]
+
+Run the Endee functional test suite against Endee Serverless.
+
+Options:
+  --token <api_token>   Endee Serverless API token (required)
+  --base-url <url>      Override the API base URL (derived from token if omitted)
+  --clean               Wipe and recreate .venv before running, delete it after
+  --                    Pass all following arguments directly to pytest
+  -h, --help            Show this help message
+
+Examples:
+  $0 --token <your_token>
+  $0 --token <your_token> --base-url http://localhost:8080/api/v1
+  $0 --token <your_token> --clean
+  $0 --token <your_token> -- tests/test_querying.py
+  $0 --token <your_token> -- -k test_filter_eq
+  $0 --token <your_token> --clean -- tests/test_querying.py
+EOF
   exit 1
 }
 
+# Strip --clean from any position before standard flag parsing begins
+CLEAN=0
+FILTERED_ARGS=()
+for arg in "$@"; do
+  if [[ "$arg" == "--clean" ]]; then
+    CLEAN=1
+  else
+    FILTERED_ARGS+=("$arg")
+  fi
+done
+set -- "${FILTERED_ARGS[@]+"${FILTERED_ARGS[@]}"}"
+
+# Parse remaining flags
 TOKEN=""
 BASE_URL=""
-CLEAN=0
+PYTEST_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --token)    TOKEN="$2";    shift 2 ;;
     --base-url) BASE_URL="$2"; shift 2 ;;
-    --clean)    CLEAN=1;       shift ;;
-    --)         shift; break ;;
+    --)         shift; PYTEST_ARGS+=("$@"); break ;;
     -h|--help)  usage ;;
     *)          echo "Unknown argument: $1"; usage ;;
   esac
@@ -43,26 +63,22 @@ VENV_DIR="$REPO_ROOT/.venv"
 
 cd "$REPO_ROOT"
 
-# Remove existing venv if --clean was requested
 if [[ "$CLEAN" -eq 1 && -d "$VENV_DIR" ]]; then
   echo "Removing existing virtual environment ..."
   rm -rf "$VENV_DIR"
 fi
 
-# Create virtual environment if it does not exist
 if [[ ! -d "$VENV_DIR" ]]; then
   echo "Creating virtual environment at .venv ..."
   python3 -m venv "$VENV_DIR"
 fi
 
-# Activate
 source "$VENV_DIR/bin/activate"
 
-# Install / sync dependencies
 echo "Installing dependencies ..."
 pip install --quiet --upgrade pip
 pip install --quiet -e .
-pip install --quiet pytest pytest-html pytest-timeout numpy pytest-github-actions-annotate-failures
+pip install --quiet pytest pytest-timeout numpy
 
 export ENDEE_TOKEN="$TOKEN"
 if [[ -n "$BASE_URL" ]]; then
@@ -70,9 +86,18 @@ if [[ -n "$BASE_URL" ]]; then
 fi
 
 echo "Running tests ..."
-pytest tests/ \
+pytest \
   -v \
   --timeout=120 \
   --tb=short \
   -p no:warnings \
-  "$@"
+  "${PYTEST_ARGS[@]+"${PYTEST_ARGS[@]}"}"
+EXIT_CODE=$?
+
+if [[ "$CLEAN" -eq 1 ]]; then
+  echo "Removing virtual environment ..."
+  deactivate 2>/dev/null || true
+  rm -rf "$VENV_DIR"
+fi
+
+exit $EXIT_CODE

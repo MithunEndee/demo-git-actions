@@ -3,7 +3,7 @@ Shared pytest fixtures for Endee functional tests.
 
 Environment variables:
   ENDEE_TOKEN    - Required. Endee Serverless API token.
-  ENDEE_BASE_URL - Optional. Override base URL (e.g. http://0.0.0.0:8080/api/v1)
+  ENDEE_BASE_URL - Optional. Override base URL (e.g. http://localhost:8080/api/v1)
 """
 
 import re
