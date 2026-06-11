@@ -145,9 +145,12 @@ def test_list_indexes_does_not_contain_deleted_index(client):
     client.create_index(
         name=name, dimension=DIM, space_type="cosine", precision=Precision.INT8
     )
-    client.delete_index(name)
-    names = get_index_names(client)
-    assert name not in names
+    try:
+        client.delete_index(name)
+        names = get_index_names(client)
+        assert name not in names
+    finally:
+        safe_delete(client, name)
 
 
 def test_get_index_attributes_match_creation(client):
@@ -224,8 +227,11 @@ def test_delete_index_returns_success_message(client):
     client.create_index(
         name=name, dimension=DIM, space_type="cosine", precision=Precision.INT8
     )
-    result = client.delete_index(name)
-    assert name in result
+    try:
+        result = client.delete_index(name)
+        assert name in result
+    finally:
+        safe_delete(client, name)
 
 
 def test_delete_index_removes_from_list(client):
@@ -234,6 +240,9 @@ def test_delete_index_removes_from_list(client):
     client.create_index(
         name=name, dimension=DIM, space_type="cosine", precision=Precision.INT8
     )
-    client.delete_index(name)
-    names = get_index_names(client)
-    assert name not in names
+    try:
+        client.delete_index(name)
+        names = get_index_names(client)
+        assert name not in names
+    finally:
+        safe_delete(client, name)

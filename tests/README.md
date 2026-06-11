@@ -1,13 +1,49 @@
 # Functional Tests
 
-End-to-end tests for the Endee Python client. Tests run against a live Endee
-Server - either the hosted cloud or a local OSS Docker container.
+End-to-end tests for the Endee Python client against Endee Serverless.
+
+**Requirements:** An `ENDEE_TOKEN` from [app.endee.io](https://app.endee.io).
 
 ---
 
 ## Running locally
 
-**Install dependencies**
+### Option 1 - Shell script (recommended)
+
+The `run_tests.sh` script handles everything - it creates a `.venv` virtual environment
+at the repo root (if one does not already exist), installs all dependencies into it,
+and runs pytest. It can be invoked from any directory.
+
+```bash
+# Full test suite
+./tests/run_tests.sh --token user:mytoken:us-east
+
+# With an explicit base URL
+./tests/run_tests.sh --token user:mytoken:us-east --base-url http://0.0.0.0:8080/api/v1
+
+# Delete .venv and reinstall everything before running
+./tests/run_tests.sh --token user:mytoken:us-east --clean
+
+# Run a specific test file
+./tests/run_tests.sh --token user:mytoken:us-east -- tests/test_query_basic.py
+
+# Run tests matching a keyword
+./tests/run_tests.sh --token user:mytoken:us-east -- -k test_filter_eq
+
+# Show help
+./tests/run_tests.sh --help
+```
+
+Anything after `--` is passed directly to pytest, so all standard pytest flags work.
+
+The virtual environment is created once at `.venv/` and reused on subsequent runs.
+Pass `--clean` to wipe and recreate it from scratch.
+
+---
+
+### Option 2 - Manual
+
+**Step 1: Install dependencies**
 
 ```bash
 # From source (development)
@@ -19,63 +55,43 @@ pip install endee
 pip install pytest pytest-html pytest-timeout numpy
 ```
 
-**OSS mode** (no token - spins up a local Docker container)
+**Step 2: Set environment variables**
 
 ```bash
-# Start the server
-docker run -d \
-  --ulimit nofile=100000:100000 \
-  -p 8080:8080 \
-  -e NDD_AUTH_TOKEN="" \
-  -e NDD_NUM_THREADS=2 \
-  --name endee-oss \
-  endeeio/endee-server:latest
+export ENDEE_TOKEN=user:mytoken:us-east
 
-# Run tests
-pytest
-```
-
-**Cloud mode** (token from app.endee.io)
-
-```bash
-export ENDEE_TOKEN=your_token_here
-pytest
-```
-
-**Override the server URL** (optional)
-
-```bash
+# Optional - only needed to override the URL derived from the token
 export ENDEE_BASE_URL=http://0.0.0.0:8080/api/v1
-pytest
+```
+
+**Step 3: Run pytest from the repo root**
+
+```bash
+pytest tests/
 ```
 
 ---
 
 ## Running via GitHub Actions
 
-Trigger manually: **Actions → Functional Tests → Run workflow**
-
-The workflow supports two modes determined by whether a token is provided.
-
-**Serverless mode** (token provided)
-
-Provide an API token from the Endee Serverless. The client derives the correct
-API endpoint from the token automatically. Leave `base_url` empty.
-
-**OSS / self-hosted mode** (no token)
-
-Leave `token` empty. The workflow pulls `endeeio/endee-server:latest` and starts
-a local server on port 8080 with authentication disabled. `base_url` defaults to
-`http://127.0.0.1:8080/api/v1`. To target an already-running server on another
-host, set `base_url` (e.g. `http://0.0.0.0:8080/api/v1`) and leave `token` empty.
+Trigger manually: **Actions - Functional Tests - Run workflow**
 
 | Input | Required | Description |
 |-------|----------|-------------|
-| `token` | No | Endee Serverless API token. Leave blank for OSS mode. |
-| `base_url` | No | API base URL override. Leave blank to use the mode default. |
+| `token` | No | Endee Serverless API token. Leave blank to use the `ENDEE_TOKEN` repository secret. |
+| `base_url` | No | API base URL override. Leave blank to derive from the token. |
 
-Results appear on the Actions run summary page and as a PR comment. A full HTML
-report and JUnit XML are uploaded as artifacts (retained for 7 days).
+Results appear on the Actions run summary page. A full HTML report and JUnit XML
+are uploaded as artifacts (retained for 7 days).
+
+To enable automatic runs on pull requests, uncomment the `pull_request` trigger in
+`.github/workflows/functional_test.yml` and add the following under
+**Settings - Secrets and variables - Actions**:
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `ENDEE_TOKEN` | Yes | Endee Serverless API token. |
+| `ENDEE_BASE_URL` | No | Override the API base URL. Leave unset to derive it from the token. |
 
 ---
 
@@ -83,13 +99,12 @@ report and JUnit XML are uploaded as artifacts (retained for 7 days).
 
 | File | What it covers |
 |------|----------------|
-| `test_index_management.py` | Create, list, describe, delete indexes; all precision × space type combinations; HNSW params; hybrid indexes |
+| `test_index_management.py` | Create, list, describe, delete indexes; all precision x space type combinations; HNSW params; hybrid indexes |
 | `test_vector_operations.py` | Upsert, get, update filters, delete by ID, delete by filter |
 | `test_query_basic.py` | Query result structure, `top_k`, `ef`, `include_vectors`, meta round-trip |
 | `test_query_filters.py` | `$eq`, `$in`, `$range` operators; combined filters; `filter_boost_percentage`; `prefilter_cardinality_threshold` |
-| `test_hybrid_search.py` | Dense-only, sparse-only, and full hybrid queries; result structure; `top_k`/`ef`; `$eq`/`$in`/`$range` filters; `filter_boost_percentage`; RRF weights; `get_vector`; `update_filters`; `delete_vector`; `delete_with_filter` |
-| `test_error_handling.py` | Client-side `ValueError` for invalid inputs; server-side `ConflictException` / `NotFoundException`; batch and dimension constraints |
-| `test_serverless.py` | **Serverless only** (`ENDEE_TOKEN` required - skipped in OSS mode). INT8E precision: index creation × all space types and dimensions; upsert; query; `get_vector`; `update_filters`; `delete_vector`; `delete_with_filter`. Rebuild: trigger, response shape, config changes, HNSW param combinations, `rebuild_status` polling. Token/auth: invalid token, empty token, `set_token`, `AuthenticationException` |
+| `test_hybrid_search.py` | Dense-only, sparse-only, and full hybrid queries; result structure; `top_k`/`ef`; filter operators; `filter_boost_percentage`; RRF weights; `get_vector`; `update_filters`; `delete_vector`; `delete_with_filter` |
+| `test_error_handling.py` | Client-side `ValueError` for invalid inputs; server-side `ConflictException` / `NotFoundException`; batch and dimension constraints; token authentication errors |
 
 ---
 
@@ -98,7 +113,8 @@ report and JUnit XML are uploaded as artifacts (retained for 7 days).
 | File | Purpose |
 |------|---------|
 | `conftest.py` | pytest fixtures (`client`, `empty_index`, `populated_index`, `empty_hybrid_index`, `populated_hybrid_index`) |
-| `helpers.py` | Shared constants (`DIM`, `N_VECTORS`, …) and generators (`dense_vec`, `sparse_vec`, `make_item`, `get_index_names`, …) |
+| `helpers.py` | Shared constants (`DIM`, `N_VECTORS`, ...) and generators (`dense_vec`, `sparse_vec`, `make_item`, `get_index_names`, ...) |
+| `run_tests.sh` | Shell script for running the suite locally with token and optional URL |
 | `pytest.ini` *(repo root)* | Sets `testpaths = tests` and `pythonpath = tests` so `helpers` is importable without installation |
 
 ---
