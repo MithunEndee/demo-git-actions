@@ -96,6 +96,7 @@ jobs:
         if: always()
         env:
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.head.sha || github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'PYEOF'
@@ -103,6 +104,7 @@ jobs:
 
           summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
           commit_sha   = os.environ.get("COMMIT_SHA", "unknown")[:7]
+          commit_url   = os.environ.get("COMMIT_URL", "")
           run_url      = os.environ.get("RUN_URL", "")
 
           if not summary_file:
@@ -133,9 +135,9 @@ jobs:
               duration = f"{mins}m {secs}s" if mins else f"{secs}s"
 
               lines = [
-                  "## Endee Client Test Report",
+                  "## Endee Functional Test Report",
                   "",
-                  f"**Commit:** `{commit_sha}` | **[View Action Logs]({run_url})**",
+                  f"**Commit:** [`{commit_sha}`]({commit_url}) | **[View Action Logs]({run_url})**",
                   "",
                   "| Result  | Count |",
                   "|---------|------:|",
