@@ -97,6 +97,8 @@ jobs:
         env:
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.base.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'PYEOF'
@@ -105,6 +107,8 @@ jobs:
           summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
           commit_sha   = os.environ.get("COMMIT_SHA", "unknown")[:7]
           commit_url   = os.environ.get("COMMIT_URL", "")
+          base_sha     = (os.environ.get("BASE_SHA", "") or "")[:7]
+          base_url     = os.environ.get("BASE_URL", "")
           run_url      = os.environ.get("RUN_URL", "")
 
           if not summary_file:
@@ -137,7 +141,7 @@ jobs:
               lines = [
                   "## Endee Functional Test Report",
                   "",
-                  f"**Commit:** [`{commit_sha}`]({commit_url}) | **[View Action Logs]({run_url})**",
+                  f"**Commit:** [`{commit_sha}`]({commit_url})" + (f" | **Base:** [`{base_sha}`]({base_url})" if base_sha else "") + f" | **[View Action Logs]({run_url})**",
                   "",
                   "| Result  | Count |",
                   "|---------|------:|",
