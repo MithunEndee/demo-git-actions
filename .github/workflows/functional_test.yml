@@ -98,9 +98,9 @@ jobs:
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.head.sha || github.sha }}
           BRANCH: ${{ github.head_ref || github.ref_name }}
+          BRANCH_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.head_ref || github.ref_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-          ACTOR: ${{ github.actor }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'PYEOF'
@@ -110,9 +110,9 @@ jobs:
           commit_sha   = os.environ.get("COMMIT_SHA", "unknown")[:7]
           commit_url   = os.environ.get("COMMIT_URL", "")
           branch       = os.environ.get("BRANCH", "")
+          branch_url   = os.environ.get("BRANCH_URL", "")
           pr_number    = os.environ.get("PR_NUMBER", "")
           pr_url       = os.environ.get("PR_URL", "")
-          actor        = os.environ.get("ACTOR", "")
           run_url      = os.environ.get("RUN_URL", "")
 
           if not summary_file:
@@ -146,9 +146,8 @@ jobs:
                   "## Endee Functional Test Report",
                   "",
                   "**Commit:** " + f"[`{commit_sha}`]({commit_url})" +
-                      (f" | **Branch:** `{branch}`" if branch else "") +
+                      (f" | **Branch:** [`{branch}`]({branch_url})" if branch else "") +
                       (f" | **PR:** [#{pr_number}]({pr_url})" if pr_number else "") +
-                      (f" | **Triggered by:** @{actor}" if actor else "") +
                       f" | **[View Action Logs]({run_url})**",
                   "",
                   "| Result  | Count |",
