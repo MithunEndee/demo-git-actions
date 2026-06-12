@@ -220,23 +220,24 @@ jobs:
         if: always() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           MARKER="<!-- endee-functional-tests -->"
+          COMMIT="${{ github.event.pull_request.head.sha }}"
           BODY="${MARKER}
-          **Endee Functional Tests** - Run completed. [View full report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          **Endee Functional Tests** - Run completed. [View full report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          Last updated: commit \`${COMMIT:0:7}\`"
 
           COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
             --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -1)
 
           if [ -n "$COMMENT_ID" ]; then
             gh api repos/${{ github.repository }}/issues/comments/$COMMENT_ID \
-              -X PATCH -f body="$BODY"
-            echo "Updated existing comment $COMMENT_ID"
-          else
-            gh pr comment ${{ github.event.pull_request.number }} --body "$BODY"
-            echo "Posted new comment"
+              -X DELETE > /dev/null
+            echo "Deleted previous comment"
           fi
+
+          gh pr comment ${{ github.event.pull_request.number }} --body "$BODY"
+          echo "Posted updated comment"
 
       - name: Upload test artifacts
         if: always()
