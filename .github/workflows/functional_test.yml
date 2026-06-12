@@ -223,9 +223,10 @@ jobs:
         run: |
           MARKER="<!-- endee-functional-tests -->"
           COMMIT="${{ github.event.pull_request.head.sha }}"
+          BRANCH="${{ github.head_ref }}"
           BODY="${MARKER}
-          **Endee Functional Tests** - Run completed. [View full report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          Last updated: commit \`${COMMIT:0:7}\`"
+          **Endee Functional Tests** - [View full report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          Commit [`${COMMIT:0:7}`](${{ github.server_url }}/${{ github.repository }}/commit/${COMMIT}) on [`${BRANCH}`](${{ github.server_url }}/${{ github.repository }}/tree/${BRANCH})"
 
           COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
             --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -1)
