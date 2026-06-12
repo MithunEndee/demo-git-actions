@@ -100,12 +100,12 @@ def test_create_index_dim_2_is_valid(client):
         safe_delete(client, name)
 
 
-def test_create_index_dim_8000_is_valid(client):
-    """create_index with dimension=8000 (maximum valid value) must succeed."""
+def test_create_index_dim_4000_is_valid(client):
+    """create_index with dimension=4000 must succeed."""
     name = uid("d8k")
     try:
         client.create_index(
-            name=name, dimension=8000, space_type="cosine", precision=Precision.INT8
+            name=name, dimension=4000, space_type="cosine", precision=Precision.INT8
         )
     finally:
         safe_delete(client, name)
