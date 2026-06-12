@@ -1,5 +1,8 @@
 name: Functional Tests
 
+# Runs the Endee client functional test suite against Endee Serverless.
+# See tests/README.md for full usage details.
+
 on:
   pull_request:
     branches:
@@ -12,6 +15,7 @@ on:
         required: false
         default: ""
         type: string
+
       base_url:
         description: "API base URL override (e.g. http://localhost:8080/api/v1). Leave blank to derive from token."
         required: false
@@ -27,11 +31,7 @@ jobs:
     permissions:
       contents: read
       checks: write
-
-    # Global environment mapping for the entire job lifecycle
-    env:
-      ENDEE_TOKEN: ${{ inputs.token || secrets.ENDEE_TOKEN }}
-      ENDEE_BASE_URL: ${{ inputs.base_url || secrets.ENDEE_BASE_URL }}
+      pull-requests: write
 
     steps:
       - name: Checkout repository
@@ -50,16 +50,20 @@ jobs:
           pip install pytest pytest-html pytest-timeout numpy pytest-github-actions-annotate-failures
 
       - name: Verify server connectivity
-        id: verify-conn
-        # Gracefully skip if a fork PR has no access to target environment secrets
-        if: env.ENDEE_TOKEN != ''
+        env:
+          ENDEE_TOKEN:    ${{ inputs.token || secrets.ENDEE_TOKEN }}
+          ENDEE_BASE_URL: ${{ inputs.base_url || secrets.ENDEE_BASE_URL }}
         run: |
           python - <<'PYEOF'
           import os, sys
           from endee import Endee
 
-          token    = os.environ.get("ENDEE_TOKEN")
-          base_url = os.environ.get("ENDEE_BASE_URL")
+          token    = os.environ.get("ENDEE_TOKEN")    or None
+          base_url = os.environ.get("ENDEE_BASE_URL") or None
+
+          if not token:
+              print("ENDEE_TOKEN is not set", file=sys.stderr)
+              sys.exit(1)
 
           c = Endee(token=token)
           if base_url:
@@ -74,7 +78,9 @@ jobs:
           PYEOF
 
       - name: Run functional tests
-        if: env.ENDEE_TOKEN != '' && (steps.verify-conn.outcome == 'success')
+        env:
+          ENDEE_TOKEN:    ${{ inputs.token || secrets.ENDEE_TOKEN }}
+          ENDEE_BASE_URL: ${{ inputs.base_url || secrets.ENDEE_BASE_URL }}
         run: |
           pytest tests/ \
             -v \
@@ -107,18 +113,16 @@ jobs:
           pr_number    = os.environ.get("PR_NUMBER", "")
           pr_url       = os.environ.get("PR_URL", "")
           run_url      = os.environ.get("RUN_URL", "")
-          token_check  = os.environ.get("ENDEE_TOKEN", "")
 
           if not summary_file:
+              print("GITHUB_STEP_SUMMARY not set - skipping summary")
               sys.exit(0)
 
           def write_out(content):
               with open(summary_file, "a") as f:
                   f.write(content)
-
-          if not token_check:
-              write_out(f"## Endee Functional Test Report\n\n **Skipped**: Internal environment secrets are inaccessible from this fork pipeline context.")
-              sys.exit(0)
+              with open("pr-comment.md", "w") as f:
+                  f.write(content)
 
           try:
               tree = ET.parse("test-results.xml")
@@ -176,8 +180,8 @@ jobs:
 
               if failed_cases:
                   lines += [
-                      "<details open>",
-                      f"<summary> Failed tests ({len(failed_cases)})</summary>",
+                      "<details>",
+                      f"<summary>Failed tests ({len(failed_cases)})</summary>",
                       "",
                       "| Test | Reason |",
                       "|------|--------|",
@@ -194,7 +198,7 @@ jobs:
 
                   lines += [
                       "<details>",
-                      f"<summary> Skipped tests ({len(skipped_cases)})</summary>",
+                      f"<summary>Skipped tests ({len(skipped_cases)})</summary>",
                       "",
                   ]
                   for reason, names in by_reason.items():
@@ -206,15 +210,27 @@ jobs:
                   lines += ["</details>", ""]
 
               write_out("\n".join(lines) + "\n")
+              print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
-              write_out(f"## Endee Functional Test Report\n\n `test-results.xml` not found. Testing pipeline failed prematurely.\n")
+              write_out(f"## Test Report\n\n**Commit:** `{commit_sha}`\n\n`test-results.xml` not found - pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
 
+      - name: Post Test Summary to PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -s pr-comment.md ]; then
+            gh pr comment ${{ github.event.pull_request.number }} -F pr-comment.md
+          else
+            echo "Comment file is empty or missing. Skipping PR comment."
+          fi
+
       - name: Upload test artifacts
-        if: always() && env.ENDEE_TOKEN != ''
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: endee-functional-test-results
