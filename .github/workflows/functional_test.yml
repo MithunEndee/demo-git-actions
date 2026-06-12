@@ -94,6 +94,7 @@ jobs:
       - name: Write test summary
         if: always()
         env:
+          GH_TOKEN: ${{ github.token }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.head.sha || github.sha }}
           BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -101,6 +102,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
+          JOB_ID=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs \
+            --jq '.jobs[] | select(.name == "Endee Functional Tests") | .id' 2>/dev/null || echo "")
+          [ -n "$JOB_ID" ] && export JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${JOB_ID}"
+
           python - <<'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
 
@@ -111,6 +116,7 @@ jobs:
           branch_url   = os.environ.get("BRANCH_URL", "")
           pr_number    = os.environ.get("PR_NUMBER", "")
           pr_url       = os.environ.get("PR_URL", "")
+          job_url      = os.environ.get("JOB_URL", "")
 
           if not summary_file:
               print("GITHUB_STEP_SUMMARY not set - skipping summary")
@@ -142,7 +148,8 @@ jobs:
                   "",
                   "**Commit:** " + f"[`{commit_sha}`]({commit_url})" +
                       (f" | **Branch:** [`{branch}`]({branch_url})" if branch else "") +
-                      (f" | **PR:** [#{pr_number}]({pr_url})" if pr_number else ""),
+                      (f" | **PR:** [#{pr_number}]({pr_url})" if pr_number else "") +
+                      (f" | **[View Job Steps]({job_url})**" if job_url else ""),
                   "",
                   "| Result  | Count |",
                   "|---------|------:|",
