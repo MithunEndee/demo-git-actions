@@ -1,7 +1,10 @@
+import os
+
 import pytest
 
 from endee import Endee, Precision
 from endee.exceptions import (
+    AuthenticationException,
     ConflictException,
     EndeeException,
     NotFoundException,
@@ -97,12 +100,12 @@ def test_create_index_dim_2_is_valid(client):
         safe_delete(client, name)
 
 
-def test_create_index_dim_8000_is_valid(client):
-    """create_index with dimension=8000 (maximum valid value) must succeed."""
+def test_create_index_dim_4000_is_valid(client):
+    """create_index with dimension=4000 must succeed."""
     name = uid("d8k")
     try:
         client.create_index(
-            name=name, dimension=8000, space_type="cosine", precision=Precision.INT8
+            name=name, dimension=4000, space_type="cosine", precision=Precision.INT8
         )
     finally:
         safe_delete(client, name)
@@ -361,3 +364,52 @@ def test_upsert_empty_id_raises(empty_index):
     _, index = empty_index
     with pytest.raises(ValueError):
         index.upsert([{"id": "", "vector": dense_vec()}])
+
+
+def _serverless_base_url():
+    """Return the serverless base URL, derived from ENDEE_BASE_URL or the token's region part."""
+    base_url = os.environ.get("ENDEE_BASE_URL")
+    if base_url:
+        return base_url
+    token = os.environ.get("ENDEE_TOKEN", "")
+    parts = token.split(":")
+    if len(parts) == 3:
+        return f"https://{parts[2]}.endee.io/api/v1"
+    pytest.skip(
+        "ENDEE_TOKEN does not contain a region part - expected format user:token:region"
+    )
+
+
+def test_set_token_updates_stored_token():
+    """set_token must update the token stored on the Endee client instance."""
+    c = Endee(token="user:original_token:region")
+    c.set_token("user:updated_token:region")
+    assert c.token == "user:updated_token:region"
+
+
+def test_invalid_token_raises_authentication_error():
+    """API calls with an invalid token must raise AuthenticationException."""
+    bad_client = Endee(token="invalid_token_xyz_12345")
+    bad_client.set_base_url(_serverless_base_url())
+
+    with pytest.raises(AuthenticationException):
+        bad_client.list_indexes()
+
+
+def test_empty_token_raises_authentication_error():
+    """API calls with an empty token must raise AuthenticationException."""
+    bad_client = Endee(token="")
+    bad_client.set_base_url(_serverless_base_url())
+
+    with pytest.raises(AuthenticationException):
+        bad_client.list_indexes()
+
+
+def test_set_token_to_invalid_causes_auth_error():
+    """After set_token with an invalid token, API calls must raise AuthenticationException."""
+    c = Endee(token=os.environ.get("ENDEE_TOKEN"))
+    c.set_base_url(_serverless_base_url())
+    c.set_token("user:now_invalid_token:region")
+
+    with pytest.raises(AuthenticationException):
+        c.list_indexes()

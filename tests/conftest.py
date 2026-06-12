@@ -2,8 +2,8 @@
 Shared pytest fixtures for Endee functional tests.
 
 Environment variables:
-  ENDEE_TOKEN    - API token (omit for OSS/local mode)
-  ENDEE_BASE_URL - Override base URL (e.g. http://0.0.0.0:8080/api/v1)
+  ENDEE_TOKEN    - Required. Endee Serverless API token.
+  ENDEE_BASE_URL - Optional. Override base URL (e.g. http://localhost:8080/api/v1)
 """
 
 import re
@@ -25,20 +25,12 @@ from helpers import (
 _TEST_INDEX_PATTERN = re.compile(r"^[a-z]+_[0-9a-f]{10}$")
 
 
-def pytest_collection_modifyitems(items):
-    """Auto-skip @pytest.mark.serverless tests when no API token is provided."""
-    if os.environ.get("ENDEE_TOKEN"):
-        return
-    skip = pytest.mark.skip(reason="Requires ENDEE_TOKEN - serverless only")
-    for item in items:
-        if item.get_closest_marker("serverless"):
-            item.add_marker(skip)
-
-
 @pytest.fixture(scope="session", autouse=True)
 def verify_server_and_cleanup():
-    """Fail fast if the server is unreachable, then remove stale test indexes."""
-    token = os.environ.get("ENDEE_TOKEN") or None
+    """Fail fast if ENDEE_TOKEN is missing or the server is unreachable, then remove stale test indexes."""
+    token = os.environ.get("ENDEE_TOKEN")
+    if not token:
+        pytest.exit("ENDEE_TOKEN is required to run the test suite", returncode=1)
     base_url = os.environ.get("ENDEE_BASE_URL") or None
     c = Endee(token=token)
     if base_url:
@@ -59,7 +51,7 @@ def verify_server_and_cleanup():
 @pytest.fixture(scope="session")
 def client() -> Endee:
     """One Endee client shared across the entire test session."""
-    token = os.environ.get("ENDEE_TOKEN") or None
+    token = os.environ.get("ENDEE_TOKEN")
     base_url = os.environ.get("ENDEE_BASE_URL") or None
     c = Endee(token=token)
     if base_url:

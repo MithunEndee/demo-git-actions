@@ -876,7 +876,7 @@ def test_hybrid_delete_with_combined_and_filters(empty_hybrid_index):
     batch = [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(20)]
     index.upsert(batch)
 
-    # Delete where category == "A" AND score <= 9  (i=0,3,6,9 → 4 vectors)
+    # Delete where category == "A" AND score <= 9  (i=0,3,6,9 -> 4 vectors)
     index.delete_with_filter(
         [
             {"category": {"$eq": "A"}},

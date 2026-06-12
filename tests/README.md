@@ -1,104 +1,141 @@
-# Functional Tests
+# Endee Python Client - Functional Test Suite
 
-End-to-end tests for the Endee Python client. Tests run against a live Endee
-Server - either the hosted cloud or a local OSS Docker container.
+This directory contains the end-to-end functional tests for the [Endee](https://endee.io) Python client.
+The suite validates the full lifecycle of the Endee Serverless vector database - index management, vector operations, querying, filtering, hybrid search, and error handling.
+
+> **Note:** An active Endee Serverless API token is required to run these tests.
+
+---
+
+## Running the tests
+
+Choose the method that fits your situation:
+
+| Method | Best for |
+|--------|----------|
+| [Run locally](#running-locally) | Development and debugging on your machine |
+| [GitHub Actions](#running-via-github-actions) | Automated runs on pull requests, or triggered manually |
 
 ---
 
 ## Running locally
 
-**Install dependencies**
+Two options are available. **Option 1 is recommended** - it handles everything automatically.
+Option 2 gives you full manual control, and also works on Windows.
+
+### Option 1 - Shell script (macOS / Linux)
+
+The script creates a virtual environment, installs dependencies, and runs the tests.
 
 ```bash
-# From source (development)
+# Show all available options and examples
+./tests/run_tests.sh --help
+
+# Run the full test suite
+./tests/run_tests.sh --token <your_token>
+
+# Override the API base URL
+./tests/run_tests.sh --token <your_token> --base-url http://localhost:8080/api/v1
+```
+
+### Option 2 - Manual (all platforms)
+
+**Prerequisites:** Python 3.9 or higher must be installed.
+
+**Step 1: Create and activate a virtual environment**
+
+```bash
+# macOS / Linux
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Windows
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+**Step 2: Install dependencies**
+
+```bash
 pip install -e .
-
-# Or from PyPI
-pip install endee
-
-pip install pytest pytest-html pytest-timeout numpy
+pip install pytest numpy
 ```
 
-**OSS mode** (no token - spins up a local Docker container)
+**Step 3: Set environment variables**
 
 ```bash
-# Start the server
-docker run -d \
-  --ulimit nofile=100000:100000 \
-  -p 8080:8080 \
-  -e NDD_AUTH_TOKEN="" \
-  -e NDD_NUM_THREADS=2 \
-  --name endee-oss \
-  endeeio/endee-server:latest
+# macOS / Linux
+export ENDEE_TOKEN=<your_token>
+export ENDEE_BASE_URL=http://localhost:8080/api/v1   # optional
 
-# Run tests
-pytest
+# Windows
+set ENDEE_TOKEN=<your_token>
+set ENDEE_BASE_URL=http://localhost:8080/api/v1       # optional
 ```
 
-**Cloud mode** (token from app.endee.io)
+**Step 4: Run from the repo root**
 
 ```bash
-export ENDEE_TOKEN=your_token_here
-pytest
+# Run the full test suite
+pytest tests/
+
+# Run a specific test file
+pytest tests/test_querying.py
+
+# Run tests matching a keyword
+pytest tests/ -k test_filter_eq
 ```
 
-**Override the server URL** (optional)
-
-```bash
-export ENDEE_BASE_URL=http://0.0.0.0:8080/api/v1
-pytest
-```
+> **Tip:** Add `-v` to any command above to see each test name and its result as it runs (e.g. `pytest tests/ -v`).
 
 ---
 
 ## Running via GitHub Actions
 
-Trigger manually: **Actions → Functional Tests → Run workflow**
+The workflow supports both automatic and manual runs.
 
-The workflow supports two modes determined by whether a token is provided.
+**Automatic:** Tests run on every pull request to `main` or `master`. No setup needed - the workflow picks up the token from the repository secrets automatically.
 
-**Serverless mode** (token provided)
-
-Provide an API token from the Endee Serverless. The client derives the correct
-API endpoint from the token automatically. Leave `base_url` empty.
-
-**OSS / self-hosted mode** (no token)
-
-Leave `token` empty. The workflow pulls `endeeio/endee-server:latest` and starts
-a local server on port 8080 with authentication disabled. `base_url` defaults to
-`http://127.0.0.1:8080/api/v1`. To target an already-running server on another
-host, set `base_url` (e.g. `http://0.0.0.0:8080/api/v1`) and leave `token` empty.
+**Manual:** Go to **Actions -> Functional Tests -> Run workflow**. You can optionally provide a token and base URL directly - if left blank, the repository secrets are used.
 
 | Input | Required | Description |
 |-------|----------|-------------|
-| `token` | No | Endee Serverless API token. Leave blank for OSS mode. |
-| `base_url` | No | API base URL override. Leave blank to use the mode default. |
+| `token` | No | API token. Leave blank to use the `ENDEE_TOKEN` repository secret. |
+| `base_url` | No | API base URL override. Leave blank to derive from the token. |
 
-Results appear on the Actions run summary page and as a PR comment. A full HTML
-report and JUnit XML are uploaded as artifacts (retained for 7 days).
+The following secrets are already configured under **Settings -> Secrets and variables -> Actions**:
+
+| Secret | Required | Description |
+|--------|----------|-------------|
+| `ENDEE_TOKEN` | Yes | Endee Serverless API token. |
+| `ENDEE_BASE_URL` | No | Override the API base URL. Leave unset to derive from the token. |
+
+Results appear on the Actions run summary page. A full HTML report and test results are uploaded as artifacts and kept for 7 days.
 
 ---
 
 ## Test files
 
+Each file covers a specific area of the client API. All tests run against Endee Serverless and clean up after themselves.
+
 | File | What it covers |
 |------|----------------|
-| `test_index_management.py` | Create, list, describe, delete indexes; all precision × space type combinations; HNSW params; hybrid indexes |
+| `test_index_management.py` | Create, list, describe, and delete indexes; all precision and space type combinations; HNSW params; hybrid indexes |
 | `test_vector_operations.py` | Upsert, get, update filters, delete by ID, delete by filter |
-| `test_query_basic.py` | Query result structure, `top_k`, `ef`, `include_vectors`, meta round-trip |
-| `test_query_filters.py` | `$eq`, `$in`, `$range` operators; combined filters; `filter_boost_percentage`; `prefilter_cardinality_threshold` |
-| `test_hybrid_search.py` | Dense-only, sparse-only, and full hybrid queries; result structure; `top_k`/`ef`; `$eq`/`$in`/`$range` filters; `filter_boost_percentage`; RRF weights; `get_vector`; `update_filters`; `delete_vector`; `delete_with_filter` |
-| `test_error_handling.py` | Client-side `ValueError` for invalid inputs; server-side `ConflictException` / `NotFoundException`; batch and dimension constraints |
-| `test_serverless.py` | **Serverless only** (`ENDEE_TOKEN` required - skipped in OSS mode). INT8E precision: index creation × all space types and dimensions; upsert; query; `get_vector`; `update_filters`; `delete_vector`; `delete_with_filter`. Rebuild: trigger, response shape, config changes, HNSW param combinations, `rebuild_status` polling. Token/auth: invalid token, empty token, `set_token`, `AuthenticationException` |
+| `test_querying.py` | Query result structure, `top_k`, `ef`, `include_vectors`, meta round-trip |
+| `test_filtering.py` | `$eq`, `$in`, `$range` operators; combined filters; `filter_boost_percentage`; `prefilter_cardinality_threshold` |
+| `test_hybrid_search.py` | Dense-only, sparse-only, and full hybrid queries; RRF weights; filter operators; vector and filter update; delete operations |
+| `test_error_handling.py` | Invalid inputs, duplicate indexes, dimension mismatches, batch limits, and authentication errors |
 
 ---
 
 ## Support files
 
+These files are not test cases - they provide shared setup and utilities used across the test suite.
+
 | File | Purpose |
 |------|---------|
-| `conftest.py` | pytest fixtures (`client`, `empty_index`, `populated_index`, `empty_hybrid_index`, `populated_hybrid_index`) |
-| `helpers.py` | Shared constants (`DIM`, `N_VECTORS`, …) and generators (`dense_vec`, `sparse_vec`, `make_item`, `get_index_names`, …) |
-| `pytest.ini` *(repo root)* | Sets `testpaths = tests` and `pythonpath = tests` so `helpers` is importable without installation |
-
----
+| `conftest.py` | Shared pytest fixtures: `client`, `empty_index`, `populated_index`, `empty_hybrid_index`, `populated_hybrid_index` |
+| `helpers.py` | Constants (`DIM`, `N_VECTORS`, ...) and vector generators (`dense_vec`, `sparse_vec`, ...) |
+| `run_tests.sh` | Shell script for running the suite locally with automatic virtual environment setup and cleanup |
+| `pytest.ini` *(repo root)* | Tells pytest to look in the `tests/` directory by default |

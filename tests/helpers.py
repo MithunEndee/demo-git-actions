@@ -48,13 +48,13 @@ def make_item(i: int, dim: int = DIM, with_sparse: bool = False) -> dict:
       tags     : "important"|"normal"  (even/odd i)
 
     Expected counts with N_VECTORS = 50:
-      category "A"            → 17   (i % 3 == 0)
-      category "B"            → 17   (i % 3 == 1)
-      category "C"            → 16   (i % 3 == 2)
-      tags "important"        → 25   (even i)
-      score in [10, 20]       → 11   (i = 10..20)
-      category "A" AND even   →  9   (i = 0,6,12,18,24,30,36,42,48)
-      category in ["A","B"]   → 34
+      category "A"            -> 17   (i % 3 == 0)
+      category "B"            -> 17   (i % 3 == 1)
+      category "C"            -> 16   (i % 3 == 2)
+      tags "important"        -> 25   (even i)
+      score in [10, 20]       -> 11   (i = 10..20)
+      category "A" AND even   ->  9   (i = 0,6,12,18,24,30,36,42,48)
+      category in ["A","B"]   -> 34
     """
     item: dict = {
         "id": f"vec_{i:04d}",

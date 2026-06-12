@@ -1,22 +1,23 @@
 name: Functional Tests
 
-# Runs the Endee client functional test suite against OSS (Docker) or Serverless.
+# Runs the Endee client functional test suite against Endee Serverless.
 # See tests/README.md for full usage details.
 
 on:
   pull_request:
     branches:
-      - main  # Triggers automatically when a PR targets the main branch
+      - main
+      - master
   workflow_dispatch:
     inputs:
       token:
-        description: "[OPTIONAL] Endee Serverless API token. Leave blank to run in OSS mode (local Docker)."
+        description: "Endee Serverless API token. Leave blank to use the ENDEE_TOKEN secret."
         required: false
         default: ""
         type: string
 
       base_url:
-        description: "[OPTIONAL] API base URL override (e.g. http://0.0.0.0:8080/api/v1). Leave blank to use the mode default."
+        description: "API base URL override (e.g. http://localhost:8080/api/v1). Leave blank to derive from token."
         required: false
         default: ""
         type: string
@@ -25,6 +26,7 @@ jobs:
   functional-test:
     name: Endee Functional Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     permissions:
       contents: read
@@ -33,63 +35,8 @@ jobs:
       pull-requests: write
 
     steps:
-      - name: Detect run mode
-        id: mode
-        run: |
-          if [ -z "${{ inputs.token }}" ]; then
-            echo "mode=oss" >> "$GITHUB_OUTPUT"
-            echo "OSS mode: will start endeeio/endee-server:latest via Docker"
-          else
-            echo "mode=serverless" >> "$GITHUB_OUTPUT"
-            echo "Serverless mode: will connect to Endee Serverless with provided token"
-          fi
-
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: "[OSS] Pull Endee server image"
-        if: steps.mode.outputs.mode == 'oss'
-        run: docker pull endeeio/endee-server:latest
-
-      - name: "[OSS] Start Endee server container"
-        if: steps.mode.outputs.mode == 'oss'
-        run: |
-          docker run -d \
-            --ulimit nofile=100000:100000 \
-            -p 8080:8080 \
-            -e NDD_AUTH_TOKEN="" \
-            -e NDD_NUM_THREADS=2 \
-            --name endee-oss \
-            endeeio/endee-server:latest
-
-          echo "Container started. Waiting for server to become ready..."
-
-      - name: "[OSS] Wait for server to become ready"
-        if: steps.mode.outputs.mode == 'oss'
-        run: |
-          if [ -n "${{ inputs.base_url }}" ]; then
-            BASE="${{ inputs.base_url }}"
-          else
-            BASE="http://127.0.0.1:8080/api/v1"
-          fi
-
-          HEALTH="$BASE/health"
-          echo "Polling $HEALTH for up to 60 seconds..."
-
-          for i in $(seq 1 30); do
-            HTTP=$(curl -sf -o /dev/null -w "%{http_code}" "$HEALTH" 2>/dev/null || echo "000")
-            if [ "$HTTP" = "200" ]; then
-              echo "Server is ready after $((i * 2))s"
-              exit 0
-            fi
-            echo "  Attempt $i/30 - HTTP $HTTP - retrying in 2s..."
-            sleep 2
-          done
-
-          echo "::error::Server did not become ready within 60 seconds."
-          echo "Container logs:"
-          docker logs endee-oss 2>&1
-          exit 1
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -105,15 +52,19 @@ jobs:
 
       - name: Verify server connectivity
         env:
-          ENDEE_TOKEN:    ${{ inputs.token }}
-          ENDEE_BASE_URL: ${{ inputs.base_url }}
+          ENDEE_TOKEN:    ${{ inputs.token || secrets.ENDEE_TOKEN }}
+          ENDEE_BASE_URL: ${{ inputs.base_url || secrets.ENDEE_BASE_URL }}
         run: |
           python - <<'PYEOF'
           import os, sys
           from endee import Endee
 
-          token    = os.environ.get("ENDEE_TOKEN")    or None  # empty string treated as unset
+          token    = os.environ.get("ENDEE_TOKEN")    or None
           base_url = os.environ.get("ENDEE_BASE_URL") or None
+
+          if not token:
+              print("ENDEE_TOKEN is not set", file=sys.stderr)
+              sys.exit(1)
 
           c = Endee(token=token)
           if base_url:
@@ -127,14 +78,10 @@ jobs:
               sys.exit(1)
           PYEOF
 
-      # === Run the full functional test suite ===
-      #  --junit-xml  machine-readable results consumed by the summary step
-      #  --html       downloadable self-contained HTML report uploaded as artifact
       - name: Run functional tests
-        id: pytest
         env:
-          ENDEE_TOKEN:    ${{ inputs.token }}
-          ENDEE_BASE_URL: ${{ inputs.base_url }}
+          ENDEE_TOKEN:    ${{ inputs.token || secrets.ENDEE_TOKEN }}
+          ENDEE_BASE_URL: ${{ inputs.base_url || secrets.ENDEE_BASE_URL }}
         run: |
           pytest tests/ \
             -v \
@@ -145,21 +92,27 @@ jobs:
             --html=test-report.html \
             --self-contained-html
 
-      # === Write test summary to the Actions run page ===
-      #  Visible at: Actions, run page, Summary tab
       - name: Write test summary
         if: always()
         env:
-          RUN_MODE: ${{ steps.mode.outputs.mode }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.head.sha || github.sha }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          BRANCH_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.head_ref || github.ref_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
 
           summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
-          run_mode     = os.environ.get("RUN_MODE", "unknown").upper()
           commit_sha   = os.environ.get("COMMIT_SHA", "unknown")[:7]
+          commit_url   = os.environ.get("COMMIT_URL", "")
+          branch       = os.environ.get("BRANCH", "")
+          branch_url   = os.environ.get("BRANCH_URL", "")
+          pr_number    = os.environ.get("PR_NUMBER", "")
+          pr_url       = os.environ.get("PR_URL", "")
           run_url      = os.environ.get("RUN_URL", "")
 
           if not summary_file:
@@ -189,11 +142,13 @@ jobs:
               mins, secs = divmod(int(elapsed), 60)
               duration = f"{mins}m {secs}s" if mins else f"{secs}s"
 
-              # Professional metadata header
               lines = [
-                  "## Endee Client Test Report",
+                  "## Endee Functional Test Report",
                   "",
-                  f"**Mode:** `{run_mode}` | **Commit:** `{commit_sha}` | **[View Action Logs]({run_url})**",
+                  "**Commit:** " + f"[`{commit_sha}`]({commit_url})" +
+                      (f" | **Branch:** [`{branch}`]({branch_url})" if branch else "") +
+                      (f" | **PR:** [#{pr_number}]({pr_url})" if pr_number else "") +
+                      f" | **[View Action Logs]({run_url})**",
                   "",
                   "| Result  | Count |",
                   "|---------|------:|",
@@ -242,13 +197,6 @@ jobs:
                   for classname, name, reason in skipped_cases:
                       by_reason[reason].append(f"`{classname}::{name}`")
 
-                  if run_mode == "OSS":
-                      lines += [
-                          f"> **{len(skipped_cases)} test(s) skipped** - no `ENDEE_TOKEN` provided.",
-                          "> These are serverless-only tests. Re-run with a token to include them.",
-                          "",
-                      ]
-
                   lines += [
                       "<details>",
                       f"<summary>Skipped tests ({len(skipped_cases)})</summary>",
@@ -266,7 +214,7 @@ jobs:
               print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
-              write_out(f"## Test Report\n\n**Mode:** `{run_mode}` | **Commit:** `{commit_sha}`\n\n`test-results.xml` not found - pytest may not have run.\n")
+              write_out(f"## Test Report\n\n**Commit:** `{commit_sha}`\n\n`test-results.xml` not found - pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
@@ -291,7 +239,3 @@ jobs:
             test-report.html
             test-results.xml
           retention-days: 7
-
-      - name: "[OSS] Print server logs on failure"
-        if: steps.mode.outputs.mode == 'oss' && failure()
-        run: docker logs endee-oss 2>&1 || true
