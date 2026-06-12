@@ -101,7 +101,6 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          JOB_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs
         run: |
           python - <<'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
@@ -113,7 +112,7 @@ jobs:
           branch_url   = os.environ.get("BRANCH_URL", "")
           pr_number    = os.environ.get("PR_NUMBER", "")
           pr_url       = os.environ.get("PR_URL", "")
-          run_url      = os.environ.get("JOB_URL", "") or os.environ.get("RUN_URL", "")
+          run_url      = os.environ.get("RUN_URL", "")
 
           if not summary_file:
               print("GITHUB_STEP_SUMMARY not set - skipping summary")
@@ -146,7 +145,7 @@ jobs:
                   "**Commit:** " + f"[`{commit_sha}`]({commit_url})" +
                       (f" | **Branch:** [`{branch}`]({branch_url})" if branch else "") +
                       (f" | **PR:** [#{pr_number}]({pr_url})" if pr_number else "") +
-                      f" | **[View Job Steps]({run_url})**",
+                      f" | **[View Action Logs]({run_url})**",
                   "",
                   "| Result  | Count |",
                   "|---------|------:|",
@@ -225,11 +224,8 @@ jobs:
           MARKER="<!-- endee-functional-tests -->"
           COMMIT="${{ github.event.pull_request.head.sha }}"
           BRANCH="${{ github.head_ref }}"
-          JOB_ID=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs \
-            --jq '.jobs[] | select(.name == "Endee Functional Tests") | .id')
-          JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs/${JOB_ID}"
           BODY="${MARKER}
-          **Endee Functional Tests** - [View job steps](${JOB_URL})
+          **Endee Functional Tests** - [View full report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           Commit [\`${COMMIT:0:7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${COMMIT}) on [\`${BRANCH}\`](${{ github.server_url }}/${{ github.repository }}/tree/${BRANCH})"
 
           COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
