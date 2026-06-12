@@ -35,10 +35,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: "pip"
@@ -100,7 +100,6 @@ jobs:
           BRANCH_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.head_ref || github.ref_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
@@ -112,7 +111,6 @@ jobs:
           branch_url   = os.environ.get("BRANCH_URL", "")
           pr_number    = os.environ.get("PR_NUMBER", "")
           pr_url       = os.environ.get("PR_URL", "")
-          run_url      = os.environ.get("RUN_URL", "")
 
           if not summary_file:
               print("GITHUB_STEP_SUMMARY not set - skipping summary")
@@ -120,8 +118,6 @@ jobs:
 
           def write_out(content):
               with open(summary_file, "a") as f:
-                  f.write(content)
-              with open("pr-comment.md", "w") as f:
                   f.write(content)
 
           try:
@@ -146,8 +142,7 @@ jobs:
                   "",
                   "**Commit:** " + f"[`{commit_sha}`]({commit_url})" +
                       (f" | **Branch:** [`{branch}`]({branch_url})" if branch else "") +
-                      (f" | **PR:** [#{pr_number}]({pr_url})" if pr_number else "") +
-                      f" | **[View Action Logs]({run_url})**",
+                      (f" | **PR:** [#{pr_number}]({pr_url})" if pr_number else ""),
                   "",
                   "| Result  | Count |",
                   "|---------|------:|",
@@ -223,15 +218,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -s pr-comment.md ]; then
-            gh pr comment ${{ github.event.pull_request.number }} -F pr-comment.md
-          else
-            echo "Comment file is empty or missing. Skipping PR comment."
+          MARKER="<!-- endee-functional-tests -->"
+          COMMIT="${{ github.event.pull_request.head.sha }}"
+          BRANCH="${{ github.head_ref }}"
+          BODY="${MARKER}
+          **Endee Functional Tests** - [View full report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          Commit [\`${COMMIT:0:7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${COMMIT}) on [\`${BRANCH}\`](${{ github.server_url }}/${{ github.repository }}/tree/${BRANCH})"
+
+          COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
+            --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -1)
+
+          if [ -n "$COMMENT_ID" ]; then
+            gh api repos/${{ github.repository }}/issues/comments/$COMMENT_ID \
+              -X DELETE > /dev/null
+            echo "Deleted previous comment"
           fi
+
+          gh pr comment ${{ github.event.pull_request.number }} --body "$BODY"
+          echo "Posted updated comment"
 
       - name: Upload test artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: endee-functional-test-results
           path: |
