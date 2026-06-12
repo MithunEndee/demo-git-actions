@@ -100,7 +100,6 @@ jobs:
           BRANCH_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.head_ref || github.ref_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python - <<'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
@@ -112,7 +111,6 @@ jobs:
           branch_url   = os.environ.get("BRANCH_URL", "")
           pr_number    = os.environ.get("PR_NUMBER", "")
           pr_url       = os.environ.get("PR_URL", "")
-          run_url      = os.environ.get("RUN_URL", "")
 
           if not summary_file:
               print("GITHUB_STEP_SUMMARY not set - skipping summary")
@@ -144,8 +142,7 @@ jobs:
                   "",
                   "**Commit:** " + f"[`{commit_sha}`]({commit_url})" +
                       (f" | **Branch:** [`{branch}`]({branch_url})" if branch else "") +
-                      (f" | **PR:** [#{pr_number}]({pr_url})" if pr_number else "") +
-                      f" | **[View Action Logs]({run_url})**",
+                      (f" | **PR:** [#{pr_number}]({pr_url})" if pr_number else ""),
                   "",
                   "| Result  | Count |",
                   "|---------|------:|",
