@@ -94,7 +94,6 @@ jobs:
         run: |
           python - <<'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
-          from collections import defaultdict
 
           summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
           if not summary_file:
@@ -120,86 +119,59 @@ jobs:
               mins, secs = divmod(int(elapsed), 60)
               duration = f"{mins}m {secs}s" if mins else f"{secs}s"
 
-              status = "PASSED" if (failures + errors) == 0 else "FAILED"
-
               lines = [
-                  "## Endee Client — Functional Test Report",
+                  f"## Endee Functional Test Results",
                   "",
-                  f"**Status:** {status} &nbsp;|&nbsp; **Duration:** {duration} &nbsp;|&nbsp; **Run:** [`#{os.environ.get('GITHUB_RUN_NUMBER', '?')}`]({os.environ.get('GITHUB_SERVER_URL','')}/{os.environ.get('GITHUB_REPOSITORY','')}/actions/runs/{os.environ.get('GITHUB_RUN_ID','')})",
-                  "",
-                  "---",
-                  "",
-                  "### Results",
-                  "",
-                  "| Status  | Count |",
-                  "|---------|------:|",
-                  f"| Passed  | {passed} |",
-                  f"| Failed  | {failures} |",
-                  f"| Errors  | {errors} |",
-                  f"| Skipped | {skipped} |",
+                  "| Result   | Count |",
+                  "|----------|------:|",
+                  f"| Passed   | {passed} |",
+                  f"| Failed   | {failures} |",
+                  f"| Errors   | {errors} |",
+                  f"| Skipped  | {skipped} |",
                   f"| **Total** | **{total}** |",
+                  "",
+                  f"**Duration:** {duration}",
                   "",
               ]
 
               failed_cases  = []
               skipped_cases = []
-              xpass_cases   = []
-
               for tc in suite.iter("testcase"):
-                  name = tc.get("name", "unknown")
-                  cls  = tc.get("classname", "")
-
                   for tag in ("failure", "error"):
                       node = tc.find(tag)
                       if node is not None:
-                          msg = (node.get("message") or node.text or "").strip().split("\n")[0][:200]
+                          name = tc.get("name", "unknown")
+                          cls  = tc.get("classname", "")
+                          msg  = (node.get("message") or node.text or "").strip().split("\n")[0][:200]
                           failed_cases.append((cls, name, msg))
-
                   skip_node = tc.find("skipped")
                   if skip_node is not None:
+                      name   = tc.get("name", "unknown")
+                      cls    = tc.get("classname", "")
                       reason = (skip_node.get("message") or "No reason given").strip()
-                      if "xpass" in reason.lower():
-                          xpass_cases.append((cls, name))
-                      else:
-                          skipped_cases.append((cls, name, reason))
+                      skipped_cases.append((cls, name, reason))
 
               if failed_cases:
                   lines += [
-                      "---",
-                      "",
-                      f"### Failed Tests ({len(failed_cases)})",
+                      "<details>",
+                      f"<summary>Failed tests ({len(failed_cases)})</summary>",
                       "",
                       "| Test | Reason |",
                       "|------|--------|",
                   ]
                   for cls, name, msg in failed_cases:
                       lines.append(f"| `{cls}::{name}` | {msg} |")
-                  lines.append("")
-
-              if xpass_cases:
-                  lines += [
-                      "---",
-                      "",
-                      f"### Unexpected Passes — xpass ({len(xpass_cases)})",
-                      "",
-                      "> These tests were marked as expected failures but passed. "
-                      "The underlying issue may have been fixed on the server.",
-                      "",
-                  ]
-                  for cls, name in xpass_cases:
-                      lines.append(f"- `{cls}::{name}`")
-                  lines.append("")
+                  lines += ["", "</details>", ""]
 
               if skipped_cases:
+                  from collections import defaultdict
                   by_reason = defaultdict(list)
                   for cls, name, reason in skipped_cases:
                       by_reason[reason].append(f"`{cls}::{name}`")
 
                   lines += [
-                      "---",
-                      "",
                       "<details>",
-                      f"<summary>Skipped Tests ({len(skipped_cases)})</summary>",
+                      f"<summary>Skipped tests ({len(skipped_cases)})</summary>",
                       "",
                   ]
                   for reason, names in by_reason.items():
@@ -214,7 +186,7 @@ jobs:
               print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
-              write("## Endee Client — Functional Test Report\n\n`test-results.xml` not found — pytest may not have run.\n")
+              write("## Test Report\n\n`test-results.xml` not found — pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
