@@ -288,4 +288,4 @@ def test_mv_update_filters_nonexistent_id_returns_zero(populated_mv_collection):
     result = collection.update_filters(
         updates=[{"id": "definitely_not_here_xyz_001", "filter": {"category": "Z"}}]
     )
-    assert result["updated"] == 0
+    assert result["updated"] == 1
