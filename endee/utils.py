@@ -7,38 +7,32 @@ used throughout the Endee client library.
 
 import re
 
-from .constants import MAX_INDEX_NAME_LENGTH_ALLOWED
+from .constants import MAX_COLLECTION_NAME_LENGTH_ALLOWED
 
 
-def is_valid_index_name(index_name):
+def validate_collection_name(name: str) -> None:
     """
-    Validate an index name according to Endee naming rules.
+    Validate a collection name and raise ValueError if invalid.
 
-    Index names must:
+    Collection names must:
+    - Be non-empty
     - Contain only alphanumeric characters (a-z, A-Z, 0-9) and underscores (_)
-    - Be no longer than MAX_INDEX_NAME_LENGTH_ALLOWED characters
-
-    Args:
-        index_name (str): The index name to validate
-
-    Returns:
-        bool: True if the index name is valid, False otherwise
-
-    Example:
-        >>> is_valid_index_name("my_index_123")
-        True
-        >>> is_valid_index_name("my-index")  # Hyphens not allowed
-        False
-        >>> is_valid_index_name("my index")  # Spaces not allowed
-        False
-        >>> is_valid_index_name("a" * 100)  # Too long
-        False
+    - Not start with double underscore ('__')
+    - Be no longer than MAX_COLLECTION_NAME_LENGTH_ALLOWED characters
     """
-    # Pattern matches alphanumeric characters and underscores only
+    if not name:
+        raise ValueError("Collection name cannot be empty.")
     pattern = re.compile(r"^[a-zA-Z0-9_]+$")
-
-    # Check both pattern match and length constraint
-    return (
-        pattern.match(index_name) is not None
-        and len(index_name) <= MAX_INDEX_NAME_LENGTH_ALLOWED
-    )
+    if not pattern.match(name):
+        raise ValueError(
+            "Collection name can only contain alphanumeric characters and underscores."
+        )
+    if name.startswith("__"):
+        raise ValueError(
+            "Collection name cannot start with double underscores ('__')."
+        )
+    if len(name) > MAX_COLLECTION_NAME_LENGTH_ALLOWED:
+        raise ValueError(
+            f"Collection name is too long. Maximum allowed length is "
+            f"{MAX_COLLECTION_NAME_LENGTH_ALLOWED} characters."
+        )

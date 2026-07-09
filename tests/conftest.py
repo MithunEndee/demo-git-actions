@@ -1,33 +1,38 @@
 """
-Shared pytest fixtures for Endee functional tests.
+Shared pytest fixtures for Endee functional tests (v2 Collections API).
 
 Environment variables:
-  ENDEE_TOKEN    - Required. Endee Serverless API token.
-  ENDEE_BASE_URL - Optional. Override base URL (e.g. http://localhost:8080/api/v1)
+  ENDEE_TOKEN    - Required. Endee API token.
+  ENDEE_BASE_URL - Optional. Override base URL (e.g. http://localhost:8080/api/v2)
 """
 
-import re
 import os
-import pytest
+import re
 
-from endee import Endee, Precision
+import pytest
 from helpers import (
-    DIM,
     HYBRID_DIM,
     N_VECTORS,
-    get_index_names,
+    get_collection_names,
+    make_dense_field,
     make_item,
+    make_mv_field,
+    make_mv_item,
+    make_sparse_field,
+    make_sparse_item,
     safe_delete,
     uid,
 )
 
+from endee import Endee
 
-_TEST_INDEX_PATTERN = re.compile(r"^[a-z]+_[0-9a-f]{10}$")
+_TEST_COLLECTION_PATTERN = re.compile(r"^[a-z]+_[0-9a-f]{10}$")
 
 
 @pytest.fixture(scope="session", autouse=True)
 def verify_server_and_cleanup():
-    """Fail fast if ENDEE_TOKEN is missing or the server is unreachable, then remove stale test indexes."""
+    """Fail fast if ENDEE_TOKEN is missing or the server is unreachable, then
+    remove stale test collections left from previous interrupted runs."""
     token = os.environ.get("ENDEE_TOKEN")
     if not token:
         pytest.exit("ENDEE_TOKEN is required to run the test suite", returncode=1)
@@ -37,11 +42,11 @@ def verify_server_and_cleanup():
         c.set_base_url(base_url)
 
     try:
-        existing = get_index_names(c)
+        existing = get_collection_names(c)
     except Exception as e:
         pytest.exit(f"Server unreachable - aborting test session: {e}", returncode=1)
 
-    stale = [n for n in existing if _TEST_INDEX_PATTERN.match(n)]
+    stale = [n for n in existing if _TEST_COLLECTION_PATTERN.match(n)]
     for name in stale:
         safe_delete(c, name)
 
@@ -59,50 +64,90 @@ def client() -> Endee:
     yield c
 
 
+# -- Dense collection fixtures ------------------------------------------------
+
+
 @pytest.fixture
-def empty_index(client):
-    """Yield (name, index) for a fresh cosine + INT8 dense index."""
+def empty_collection(client):
+    """Yield (name, collection) for a fresh cosine + INT8 dense collection."""
     name = uid("t")
-    client.create_index(
-        name=name,
-        dimension=DIM,
-        space_type="cosine",
-        precision=Precision.INT8,
-    )
-    index = client.get_index(name)
-    yield name, index
+    client.create_collection(name=name, fields=[make_dense_field()])
+    collection = client.get_collection(name)
+    yield name, collection
     safe_delete(client, name)
 
 
 @pytest.fixture
-def populated_index(client, empty_index):
-    """Yield (name, index) with N_VECTORS deterministic vectors already upserted."""
-    name, index = empty_index
-    index.upsert([make_item(i) for i in range(N_VECTORS)])
-    yield name, index
+def populated_collection(client, empty_collection):
+    """Yield (name, collection) with N_VECTORS deterministic objects upserted."""
+    name, collection = empty_collection
+    collection.upsert([make_item(i) for i in range(N_VECTORS)])
+    yield name, collection
+
+
+# -- Hybrid collection fixtures -----------------------------------------------
 
 
 @pytest.fixture
-def empty_hybrid_index(client):
-    """Yield (name, index) for a fresh hybrid (cosine + INT8 + sparse) index."""
+def empty_hybrid_collection(client):
+    """Yield (name, collection) for a fresh hybrid (dense + sparse) collection."""
     name = uid("h")
-    client.create_index(
+    client.create_collection(
         name=name,
-        dimension=HYBRID_DIM,
-        space_type="cosine",
-        precision=Precision.INT8,
-        sparse_model="default",
+        fields=[make_dense_field(dim=HYBRID_DIM), make_sparse_field()],
     )
-    index = client.get_index(name)
-    yield name, index
+    collection = client.get_collection(name)
+    yield name, collection
     safe_delete(client, name)
 
 
 @pytest.fixture
-def populated_hybrid_index(client, empty_hybrid_index):
-    """Yield (name, index) hybrid index with N_VECTORS vectors."""
-    name, index = empty_hybrid_index
-    index.upsert(
+def populated_hybrid_collection(client, empty_hybrid_collection):
+    """Yield (name, collection) hybrid collection with N_VECTORS objects."""
+    name, collection = empty_hybrid_collection
+    collection.upsert(
         [make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(N_VECTORS)]
     )
-    yield name, index
+    yield name, collection
+
+
+# -- Sparse collection fixtures -----------------------------------------------
+
+
+@pytest.fixture
+def empty_sparse_collection(client):
+    """Yield (name, collection) for a fresh sparse-only collection."""
+    name = uid("sp")
+    client.create_collection(name=name, fields=[make_sparse_field()])
+    collection = client.get_collection(name)
+    yield name, collection
+    safe_delete(client, name)
+
+
+@pytest.fixture
+def populated_sparse_collection(client, empty_sparse_collection):
+    """Yield (name, collection) sparse collection with N_VECTORS objects."""
+    name, collection = empty_sparse_collection
+    collection.upsert([make_sparse_item(i) for i in range(N_VECTORS)])
+    yield name, collection
+
+
+# -- Multi-vector collection fixtures -----------------------------------------
+
+
+@pytest.fixture
+def empty_mv_collection(client):
+    """Yield (name, collection) for a fresh multi_vector (ColBERT-style) collection."""
+    name = uid("mv")
+    client.create_collection(name=name, fields=[make_mv_field()])
+    collection = client.get_collection(name)
+    yield name, collection
+    safe_delete(client, name)
+
+
+@pytest.fixture
+def populated_mv_collection(client, empty_mv_collection):
+    """Yield (name, collection) multi_vector collection with N_VECTORS objects."""
+    name, collection = empty_mv_collection
+    collection.upsert([make_mv_item(i) for i in range(N_VECTORS)])
+    yield name, collection

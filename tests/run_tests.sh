@@ -3,24 +3,27 @@ set -euo pipefail
 
 usage() {
   cat <<EOF
-Usage: $0 --token <api_token> [--base-url <url>] [--clean] [-- <pytest args>]
+Usage: $0 --token <api_token> [--root-token <root_token>] [--base-url <url>] [--clean] [-- <pytest args>]
 
-Run the Endee functional test suite against Endee Serverless.
+Run the Endee functional test suite against a live server.
 
 Options:
-  --token <api_token>   Endee Serverless API token (required)
-  --base-url <url>      Override the API base URL (derived from token if omitted)
-  --clean               Wipe and recreate .venv before running, delete it after
-  --                    Pass all following arguments directly to pytest
-  -h, --help            Show this help message
+  --token <api_token>       Database-level API token (required)
+  --root-token <root_token> Root token for admin tests (optional; skipped if omitted)
+  --base-url <url>          Override the API base URL
+  --clean                   Wipe and recreate .venv before running, delete it after
+  --                        Pass all following arguments directly to pytest
+  -h, --help                Show this help message
 
 Examples:
   $0 --token <your_token>
-  $0 --token <your_token> --base-url http://localhost:8080/api/v1
+  $0 --token <your_token> --base-url http://localhost:8080/api/v2
+  $0 --token <your_token> --root-token <root_token>
+  $0 --token <your_token> --root-token <root_token> --base-url http://localhost:8080/api/v2
   $0 --token <your_token> --clean
-  $0 --token <your_token> -- tests/test_querying.py
+  $0 --token <your_token> -- tests/test_searching.py
   $0 --token <your_token> -- -k test_filter_eq
-  $0 --token <your_token> --clean -- tests/test_querying.py
+  $0 --token <your_token> -- tests/test_admin.py
 EOF
   exit 1
 }
@@ -39,16 +42,18 @@ set -- "${FILTERED_ARGS[@]+"${FILTERED_ARGS[@]}"}"
 
 # Parse remaining flags
 TOKEN=""
+ROOT_TOKEN=""
 BASE_URL=""
 PYTEST_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --token)    TOKEN="$2";    shift 2 ;;
-    --base-url) BASE_URL="$2"; shift 2 ;;
-    --)         shift; PYTEST_ARGS+=("$@"); break ;;
-    -h|--help)  usage ;;
-    *)          echo "Unknown argument: $1"; usage ;;
+    --token)       TOKEN="$2";       shift 2 ;;
+    --root-token)  ROOT_TOKEN="$2";  shift 2 ;;
+    --base-url)    BASE_URL="$2";    shift 2 ;;
+    --)            shift; PYTEST_ARGS+=("$@"); break ;;
+    -h|--help)     usage ;;
+    *)             echo "Unknown argument: $1"; usage ;;
   esac
 done
 
@@ -81,6 +86,9 @@ pip install --quiet -e .
 pip install --quiet pytest pytest-timeout numpy
 
 export ENDEE_TOKEN="$TOKEN"
+if [[ -n "$ROOT_TOKEN" ]]; then
+  export NDD_ROOT_TOKEN="$ROOT_TOKEN"
+fi
 if [[ -n "$BASE_URL" ]]; then
   export ENDEE_BASE_URL="$BASE_URL"
 fi

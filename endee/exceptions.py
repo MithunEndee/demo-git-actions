@@ -92,7 +92,7 @@ class ForbiddenException(EndeeException):
     Corresponds to HTTP 403 (Forbidden) status code.
 
     Example:
-        Attempting to delete another user's index, or performing admin
+        Attempting to delete another user's collection, or performing admin
         operations without root privileges.
     """
 
@@ -115,7 +115,7 @@ class ConflictException(EndeeException):
     Corresponds to HTTP 409 (Conflict) status code.
 
     Example:
-        Attempting to create an index with a name that's already in use.
+        Attempting to create a collection with a name that's already in use.
     """
 
     def __init__(self, message):
@@ -137,8 +137,8 @@ class NotFoundException(EndeeException):
     HTTP 404 (Not Found) status code.
 
     Example:
-        Attempting to query an index that doesn't exist, or retrieving
-        a vector with an ID that's not in the index.
+        Attempting to query a collection that doesn't exist, or retrieving
+        a vector with an ID that's not in the collection.
     """
 
     def __init__(self, message):
@@ -184,7 +184,7 @@ class SubscriptionException(EndeeException):
     status code.
 
     Example:
-        Attempting to create more indexes than allowed on the Free tier,
+        Attempting to create more collections than allowed on the Free tier,
         or accessing Pro features without a Pro subscription.
     """
 
@@ -222,11 +222,11 @@ def raise_exception(code: int, text: str = None):
 
     Example:
         >>> try:
-        ...     response = client.get("/index/nonexistent")
+        ...     response = client.get("/collection/nonexistent")
         ...     if response.status_code != 200:
         ...         raise_exception(response.status_code, response.text)
         ... except NotFoundException as e:
-        ...     print(f"Index not found: {e}")
+        ...     print(f"Collection not found: {e}")
     """
     # Try to parse JSON error message
     message = None

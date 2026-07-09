@@ -15,15 +15,15 @@ with open("README.md", encoding="utf-8") as f:
 setup(
     # Package Metadata
     name="endee",
-    version="0.1.27",
-    author="",
-    author_email="",
+    version="1.1.1b0",
+    author="Endee Labs",
+    author_email="dev@endee.io",
     description=(
         "Endee is the Next-Generation Vector Database for Scalable, High-Performance AI"
     ),
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="",
+    url="https://endee.io",
     # Package Discovery
     packages=find_packages(),
     # Dependencies

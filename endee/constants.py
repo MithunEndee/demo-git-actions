@@ -15,15 +15,14 @@ class Precision(str, Enum):
     Defines the data types available for storing vector embeddings
 
     Attributes:
-        BINARY2: Binary vectors (1 bit per dimension)
+        BINARY: Binary vectors (1 bit per dimension)
         FLOAT16: 16-bit floating point
         FLOAT32: 32-bit floating point
         INT16: 16-bit integer
         INT8: 8-bit integer
-        INT8E: Enhanced 8-bit integer (serverless only)
     """
 
-    BINARY2 = "binary"
+    BINARY = "binary"
     FLOAT16 = "float16"
     FLOAT32 = "float32"
     INT16 = "int16"
@@ -31,7 +30,7 @@ class Precision(str, Enum):
     INT8E = "int8e"
 
 
-# Checksum Value while creating an index
+# Checksum Value while creating a collection
 CHECKSUM = -1
 
 # HTTP Configuration
@@ -47,10 +46,10 @@ HTTP_PROTOCOL = "http://"
 
 
 # API Endpoints
-LOCAL_BASE_URL = "http://127.0.0.1:8080/api/v1"
+LOCAL_BASE_URL = "http://127.0.0.1:8080/api/v2"
 
 
-# Vector Index Limits
+# Vector Collection Limits
 # Maximum vector dimensionality allowed
 MAX_DIMENSION_ALLOWED = 8000
 
@@ -63,8 +62,8 @@ MAX_TOP_K_ALLOWED = 4096
 # Maximum ef_search parameter for HNSW query accuracy
 MAX_EF_SEARCH_ALLOWED = 1024
 
-# Maximum length for index names (alphanumeric + underscores)
-MAX_INDEX_NAME_LENGTH_ALLOWED = 48
+# Maximum length for collection names (alphanumeric + underscores)
+MAX_COLLECTION_NAME_LENGTH_ALLOWED = 48
 
 
 # Default region for local deployments
@@ -83,7 +82,7 @@ INNER_PRODUCT = "ip"  # Inner product (dot product)
 # List of supported distance/space types
 SPACE_TYPES_SUPPORTED = [COSINE, L2, INNER_PRODUCT]
 
-# Sparse index modes supported during index creation when sparse indexing is enabled
+# Sparse field modes supported during collection creation
 SPARSE_MODE_TYPES_SUPPORTED = ["default", "endee_bm25"]
 
 
@@ -145,8 +144,8 @@ HTTPX_TIMEOUT_SEC = 30.0
 # Higher values improve recall but increase memory usage and build time
 DEFAULT_M = 16
 
-# Default ef_construction: size of dynamic candidate list during index construction
-# Higher values improve index quality but slow down construction
+# Default ef_construction: size of dynamic candidate list during collection construction
+# Higher values improve collection quality but slow down construction
 DEFAULT_EF_CON = 128
 
 # Default number of nearest neighbors to return in search queries
@@ -160,11 +159,14 @@ DEFAULT_EF_SEARCH = 128
 # filter is below this value, brute-force prefiltering is used instead of HNSW
 # filtered search. Valid range is 1,000–1,000,000.
 DEFAULT_PREFILTER_CARDINALITY_THRESHOLD = 10_000
+MIN_PREFILTER_CARDINALITY_THRESHOLD = 1_000
+MAX_PREFILTER_CARDINALITY_THRESHOLD = 1_000_000
 
 # Default filter boost percentage: expands the internal HNSW candidate pool by
 # this percentage when a filter is active, compensating for filtered-out results.
-# 0 means no boost; valid range is 0–400.
+# 0 means no boost; 100 doubles the candidate pool. Valid range is 0–100.
 DEFAULT_FILTER_BOOST_PERCENTAGE = 0
+MAX_FILTER_BOOST_PERCENTAGE = 100
 
 # FILTERS KEY VALUE SIZE LIMITS IF THEY ARE OF TYPE STRING
 MAX_KEY_BYTES = 128

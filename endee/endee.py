@@ -1,21 +1,16 @@
 """
 Endee Client Library
 
-This module provides the main client interface for interacting with the Endee
-vector database service. It includes session management, index operations.
+Main client interface for the Endee vector database service (v2 Collections API).
 """
 
 import os
-from functools import lru_cache
 
 import httpx
 import requests
 
-from endee._pydantic_compat import to_dict
+from endee.collection import Collection
 from endee.constants import (
-    CHECKSUM,
-    DEFAULT_EF_CON,
-    DEFAULT_M,
     HTTP_HTTPX_1_1_LIBRARY,
     HTTP_HTTPX_2_LIBRARY,
     HTTP_METHODS_ALLOWED,
@@ -35,8 +30,11 @@ from endee.constants import (
     Precision,
 )
 from endee.exceptions import raise_exception
-from endee.index import Index
-from endee.schema import IndexCreateRequest, IndexMetadata
+from endee.utils import validate_collection_name
+
+# Accepted values for database-admin operations (mirror the server; fail fast).
+_VALID_DB_TYPES = {"starter", "pro", "scale", "enterprise"}
+_VALID_TOKEN_TYPES = {"rw", "r"}
 
 
 class SessionManager:
@@ -248,18 +246,12 @@ class ClientManager:
 
 class Endee:
     """
-    Main client for interacting with the Endee vector database service.
-
-    This class provides the primary interface for creating, listing, and
-    managing vector indexes. It supports both
-    requests and httpx HTTP libraries with configurable connection pooling.
+    Main client for the Endee vector database service (v2 Collections API).
 
     Attributes:
-        token (str | None): Authentication token format
-        region (str): Service region (extracted from token or default)
-        base_url (str): Base URL for API endpoints
-        version (int): API version
-        library (str): HTTP library to use ('requests', 'httpx1.1', or 'httpx2')
+        token (str | None): Authentication token
+        base_url (str): Base URL for v1 API endpoints (v2 URL is derived automatically)
+        library (str): HTTP library — 'requests' (default), 'httpx1.1', or 'httpx2'
     """
 
     def __init__(
@@ -283,20 +275,20 @@ class Endee:
         self.token = token
         self.region = LOCAL_REGION
         self.base_url = LOCAL_BASE_URL
+        self.version = 2
 
         # Parse token to extract region if present
         if token:
             token_parts = self.token.split(":")
             if len(token_parts) > 2:
-                self.base_url = f"https://{token_parts[2]}.endee.io/api/v1"
+                self.base_url = f"https://{token_parts[2]}.endee.io/api/v2"
                 self.token = f"{token_parts[0]}:{token_parts[1]}"
 
-        self.version = 1
         self.library = http_library
 
         # Initialize appropriate session/client manager based on library choice
         if self.library == HTTP_REQUESTS_LIBRARY:
-            # Centralized session manager - shared across all Index objects
+            # Centralized session manager - shared across all Collection objects
             self.session_manager = SessionManager(
                 pool_connections=10, pool_maxsize=10, max_retries=3
             )
@@ -308,7 +300,7 @@ class Endee:
         elif self.library == HTTP_HTTPX_2_LIBRARY:
             # httpx.Client based manager for HTTP/2
             self.client_manager = ClientManager(
-                http2=True,
+                enable_http2=True,
                 max_connections=10,
                 max_keepalive_connections=10,
                 max_retries=3,
@@ -369,221 +361,360 @@ class Endee:
         Set the base URL for API endpoints.
 
         Args:
-            base_url: Base URL to use for API requests
+            base_url: Base URL to use for API requests (should include /api/v2)
         """
         self.base_url = base_url
 
-    def create_index(
+    # ── internal HTTP helpers (shared by every method below) ───────────────────
+    # The client supports two backends (requests / httpx); these two helpers are
+    # the single place that knows how to dispatch to either, attach auth, and
+    # parse/raise. Every method below is built on them.
+
+    def _request(self, method: str, path: str, json=None):
+        """Send an authenticated request via the active backend; return the raw response.
+
+        Content-Type is set only when there is a JSON body. ``path`` is appended
+        to ``base_url`` (which already includes ``/api/v2``).
+        """
+        headers = {"Authorization": self.token}
+        if json is not None:
+            headers["Content-Type"] = "application/json"
+        url = f"{self.base_url}{path}"
+        if self.library == HTTP_REQUESTS_LIBRARY:
+            return self._get_session().request(method, url, headers=headers, json=json)
+        return self._get_client().request(method, url, headers=headers, json=json)
+
+    def _call(self, method: str, path: str, json=None, ok=(200,)) -> dict:
+        """``_request`` + status check + JSON parse. Returns the parsed body."""
+        resp = self._request(method, path, json=json)
+        if resp.status_code not in ok:
+            raise_exception(resp.status_code, resp.text)
+        return resp.json()
+
+    # ── Collection API (v2) ──────────────────────────────────────────────────
+
+    def create_collection(
         self,
         name: str,
-        dimension: int,
-        space_type: str,
-        M: int = DEFAULT_M,
-        ef_con: int = DEFAULT_EF_CON,
-        precision: str | Precision = Precision.INT8,
-        version: int | None = None,
-        sparse_model: str | None = None,
-    ):
+        fields: list,
+    ) -> dict:
         """
-        Create a new vector index.
+        Create a new collection with typed fields.
+
+        Each field is a plain dict sent through to the server as-is; the server
+        validates it and returns a 400 with a clear message on anything invalid.
+        Use the server-native keys exactly:
+
+            {"name": <str>, "type": "vector"|"sparse"|"multi_vector",
+             "params": {...}, "sparse_model": <str>}
+
+        Field types:
+            - "vector"       — single dense vector field
+                params: dimension (int), space_type (str), precision (str),
+                        optional M (int), ef_con (int)
+            - "sparse"       — sparse vector field
+                sparse_model: "default" or "endee_bm25" (required, top-level)
+            - "multi_vector" — multiple dense vectors per object
+                params: dimension, space_type, precision, pooling ("mean"|"max"),
+                        optional M, ef_con
 
         Args:
-            name: Index name (alphanumeric and underscores only, max length
-                defined by MAX_INDEX_NAME_LENGTH_ALLOWED)
-            dimension: Vector dimensionality (min 2, max MAX_DIMENSION_ALLOWED)
-            space_type: Distance metric ('cosine', 'euclidean', 'ip', etc.)
-            M: HNSW parameter - number of bi-directional links per node.
-                Higher values improve recall but increase memory usage.
-                Default: DEFAULT_M
-            ef_con: HNSW construction parameter - size of dynamic candidate list.
-                Higher values improve index quality but slow construction.
-                Default: DEFAULT_EF_CON
-            precision: Vector precision type (Precision.BINARY2,
-                Precision.INT8, Precision.INT16, Precision.FLOAT16,
-                Precision.FLOAT32). Default: Precision.INT16
-            version: API version (optional, uses client version if not specified)
-            sparse_model: Sparse index mode. Use "default" to enable sparse
-                search without IDF, "endee_bm25" to use
-                endee_bm25_server_idf, or omit/"None" for dense-only indexes.
+            name:   Collection name (no leading '__', no '/')
+            fields: List of field dicts in the shape above.
 
         Returns:
-            str: Success message
+            dict: Collection metadata from the server
 
-        Raises:
-            ValueError: If parameters are invalid
-            HTTPError: If API request fails
+        Example:
+            >>> client.create_collection("my_docs", fields=[
+            ...     {"name": "dense", "type": "vector",
+            ...      "params": {"dimension": 768, "space_type": "cosine",
+            ...                 "precision": "int8"}},
+            ...     {"name": "keywords", "type": "sparse",
+            ...      "sparse_model": "default"},
+            ... ])
         """
-        # Validate parameters using Pydantic
-        request_data = IndexCreateRequest(
-            name=name,
-            dimension=dimension,
-            space_type=space_type,
-            M=M,
-            ef_con=ef_con,
-            precision=precision,
-            version=version,
-            sparse_model=sparse_model,
+        validate_collection_name(name)
+
+        for f in fields:
+            if not isinstance(f, dict):
+                raise ValueError(
+                    f"Each field must be a dict, got {type(f).__name__}"
+                )
+
+        return self._call(
+            "POST", "/collection",
+            json={"name": name, "fields": fields}, ok=(200, 201),
         )
 
-        # Prepare request headers and data
-        headers = {"Authorization": f"{self.token}", "Content-Type": "application/json"}
-        data = {
-            "index_name": request_data.name,
-            "dim": request_data.dimension,
-            "space_type": request_data.space_type,
-            "M": request_data.M,
-            "ef_con": request_data.ef_con,
-            "checksum": CHECKSUM,
-            "precision": request_data.precision,
-            "version": request_data.version,
-        }
-
-        # Only include sparse_model if it's not None
-        if request_data.sparse_model is not None:
-            data["sparse_model"] = request_data.sparse_model
-
-        url = f"{self.base_url}/index/create"
-
-        # Make API request using appropriate library
-        if self.library == HTTP_REQUESTS_LIBRARY:
-            session = self._get_session()
-            response = session.post(url, headers=headers, json=data)
-        else:  # httpx1.1 or httpx2
-            client = self._get_client()
-            response = client.post(url, headers=headers, json=data)
-
-        # Handle response
-        if response.status_code != 200:
-            raise_exception(response.status_code, response.text)
-
-        return "Index created successfully"
-
-    def list_indexes(self):
+    def list_collections(self) -> list:
         """
-        List all indexes in the current account.
+        List all collections for the current user.
 
         Returns:
-            list: List of index metadata dictionaries
-
-        Raises:
-            HTTPError: If API request fails
+            list: List of collection metadata dicts
         """
-        headers = {
-            "Authorization": f"{self.token}",
-        }
+        return self._call("GET", "/collection").get("collections", [])
 
-        url = f"{self.base_url}/index/list"
-
-        # Make API request using appropriate library
-        if self.library == HTTP_REQUESTS_LIBRARY:
-            session = self._get_session()
-            response = session.get(url, headers=headers)
-        else:  # httpx1.1 or httpx2
-            client = self._get_client()
-            response = client.get(url, headers=headers)
-
-        # Handle response
-        if response.status_code != 200:
-            raise_exception(response.status_code, response.text)
-
-        indexes = response.json()
-        return indexes
-
-    def delete_index(self, name: str):
+    def get_collection(self, name: str) -> "Collection":
         """
-        Delete an index.
+        Get a Collection object for performing operations.
+
+        Fetches collection metadata and returns a Collection instance.
 
         Args:
-            name: Name of the index to delete
+            name: Collection name
 
         Returns:
-            str: Success message
-
-        Raises:
-            HTTPError: If API request fails
-
-        Note:
-            TODO - Clear the index from LRU cache when deleted
+            Collection: Collection object for vector operations
         """
-        headers = {
-            "Authorization": f"{self.token}",
-        }
+        metadata = self._call("GET", f"/collection/{name}")
+        manager = (
+            self.session_manager
+            if self.library == HTTP_REQUESTS_LIBRARY
+            else self.client_manager
+        )
+        return Collection(
+            name=name,
+            token=self.token,
+            v2_url=self.base_url,
+            metadata=metadata,
+            session_client_manager=manager,
+        )
 
-        url = f"{self.base_url}/index/{name}/delete"
-
-        # Make API request using appropriate library
-        if self.library == HTTP_REQUESTS_LIBRARY:
-            session = self._get_session()
-            response = session.delete(url, headers=headers)
-        else:  # httpx1.1 or httpx2
-            client = self._get_client()
-            response = client.delete(url, headers=headers)
-
-        # Handle response
-        if response.status_code != 200:
-            raise_exception(response.status_code, response.text)
-
-        return f"Index {name} deleted successfully"
-
-    @lru_cache(maxsize=10)  # noqa: B019
-    def get_index(self, name: str):
+    def delete_collection(self, name: str) -> dict:
         """
-        Get an index object for performing vector operations.
-
-        Retrieves index metadata from the server and creates an Index object.
-        Results are cached using LRU cache (max 10 entries) for performance.
+        Delete a collection and all its data.
 
         Args:
-            name: Name of the index to retrieve
+            name: Collection name to delete
 
         Returns:
-            Index: Index object for vector operations
-
-        Raises:
-            HTTPError: If API request fails
+            dict: {"message": "Collection deleted"}
         """
-        headers = {"Authorization": f"{self.token}", "Content-Type": "application/json"}
+        return self._call("DELETE", f"/collection/{name}")
 
-        url = f"{self.base_url}/index/{name}/info"
+    # ══════════════════════════════════════════════════════════════════════════
+    # Database administration (require the ROOT token).
+    #
+    #     admin = Endee(token=ROOT_TOKEN); admin.set_base_url(".../api/v2")
+    #     db_token = admin.create_database("alice")   # db_type defaults to "enterprise"
+    #
+    # create_database / create_token return the new db_token STRING; list_* return
+    # a list; the remaining methods return the server's JSON (dict).
+    # ══════════════════════════════════════════════════════════════════════════
 
-        # Get index details from the server
+    def create_database(self, db_name: str, db_type: str = "enterprise") -> str:
+        """Create a database (default tier ``enterprise``) and return its new db token
+        (``"db_name:secret"``)."""
+        if not db_name:
+            raise ValueError("db_name is required")
+        dt = str(db_type).lower()
+        if dt not in _VALID_DB_TYPES:
+            raise ValueError(f"db_type must be one of {sorted(_VALID_DB_TYPES)}")
+        return self._call(
+            "POST", "/admin/dbs", json={"db_name": db_name, "db_type": dt}, ok=(200, 201)
+        )["db_token"]
+
+    def list_databases(self) -> list:
+        """List all databases. Returns a list of ``{db_name, db_type, is_active, created_at}``."""
+        return self._call("GET", "/admin/dbs").get("dbs", [])
+
+    def get_database(self, db_name: str) -> dict:
+        """Get a single database's info (root or the db itself)."""
+        if not db_name:
+            raise ValueError("db_name is required")
+        return self._call("GET", f"/dbs/{db_name}/info")
+
+    def delete_database(self, db_name: str) -> dict:
+        """Delete a database and all its data."""
+        if not db_name:
+            raise ValueError("db_name is required")
+        return self._call("DELETE", f"/admin/dbs/{db_name}")
+
+    def activate_database(self, db_name: str) -> dict:
+        """Activate a previously deactivated database."""
+        return self._call("POST", f"/admin/dbs/{db_name}/activate")
+
+    def deactivate_database(self, db_name: str) -> dict:
+        """Deactivate a database (blocks its tokens without deleting data)."""
+        return self._call("POST", f"/admin/dbs/{db_name}/deactivate")
+
+    def set_database_type(self, db_name: str, db_type: str) -> dict:
+        """Change a database's tier (db_type)."""
+        dt = str(db_type).lower()
+        if dt not in _VALID_DB_TYPES:
+            raise ValueError(f"db_type must be one of {sorted(_VALID_DB_TYPES)}")
+        return self._call("PUT", f"/admin/dbs/{db_name}/type", json={"db_type": dt})
+
+    # ── admin view of collections across databases ─────────────────────────────
+
+    def list_db_collections(self, db_name: str) -> list:
+        """List the collection names in a specific database."""
+        if not db_name:
+            raise ValueError("db_name is required")
+        return self._call("GET", f"/admin/dbs/{db_name}/collection").get("collections", [])
+
+    def list_all_collections(self) -> list:
+        """List all collections across all databases, grouped by db."""
+        return self._call("GET", "/admin/collection").get("collections", [])
+
+    def delete_db_collection(self, db_name: str, collection_name: str) -> dict:
+        """Delete a collection inside a specific database."""
+        if not db_name or not collection_name:
+            raise ValueError("db_name and collection_name are required")
+        return self._call("DELETE", f"/admin/dbs/{db_name}/collection/{collection_name}")
+
+    # ── database token management ──────────────────────────────────────────────
+
+    def create_token(self, db_name: str, name: str, token_type: str = "rw") -> str:
+        """Create a named token for a database and return the new db token string.
+
+        token_type: ``"rw"`` (read-write, default) or ``"r"`` (read-only).
+        """
+        if not db_name or not name:
+            raise ValueError("db_name and name are required")
+        tt = str(token_type).lower()
+        if tt not in _VALID_TOKEN_TYPES:
+            raise ValueError(f"token_type must be one of {sorted(_VALID_TOKEN_TYPES)}")
+        return self._call(
+            "POST", f"/admin/dbs/{db_name}/tokens",
+            json={"name": name, "token_type": tt}, ok=(200, 201),
+        )["db_token"]
+
+    def list_tokens(self, db_name: str) -> list:
+        """List a database's tokens (names + types; secrets are not returned)."""
+        if not db_name:
+            raise ValueError("db_name is required")
+        return self._call("GET", f"/admin/dbs/{db_name}/tokens").get("tokens", [])
+
+    def delete_token(self, db_name: str, name: str) -> dict:
+        """Delete a database token by name."""
+        if not db_name or not name:
+            raise ValueError("db_name and name are required")
+        return self._call("DELETE", f"/admin/dbs/{db_name}/tokens/{name}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Self-service token management (operate on the CALLER's own db; use a db token)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def create_my_token(self, name: str, token_type: str = "rw") -> str:
+        """Create a new token for your own database and return the new db token string."""
+        if not name:
+            raise ValueError("name is required")
+        tt = str(token_type).lower()
+        if tt not in _VALID_TOKEN_TYPES:
+            raise ValueError(f"token_type must be one of {sorted(_VALID_TOKEN_TYPES)}")
+        return self._call(
+            "POST", "/tokens", json={"name": name, "token_type": tt}, ok=(200, 201)
+        )["db_token"]
+
+    def list_my_tokens(self) -> list:
+        """List your own database's tokens."""
+        return self._call("GET", "/tokens").get("tokens", [])
+
+    def delete_my_token(self, name: str) -> dict:
+        """Delete one of your own database's tokens by name."""
+        if not name:
+            raise ValueError("name is required")
+        return self._call("DELETE", f"/tokens/{name}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Server info
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def health(self) -> dict:
+        """Server health check. Returns ``{status, timestamp}``."""
+        return self._call("GET", "/health")
+
+    def stats(self) -> dict:
+        """Server stats. Returns ``{version, uptime, total_requests}``."""
+        return self._call("GET", "/stats")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Backups (per-database; use a db token, or the root token with db=<name>)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def list_backups(self) -> list:
+        """List this database's backups."""
+        return self._call("GET", "/backup")
+
+    def backup_info(self, backup_name: str) -> dict:
+        """Get metadata for one backup."""
+        if not backup_name:
+            raise ValueError("backup_name is required")
+        return self._call("GET", f"/backup/{backup_name}/info")
+
+    def active_backup(self) -> dict:
+        """Get the in-progress backup status for this database. ``{active: bool, ...}``."""
+        return self._call("GET", "/backup/active")
+
+    def restore_backup(self, backup_name: str, target_collection_name: str) -> dict:
+        """Restore a backup into a new collection."""
+        if not backup_name or not target_collection_name:
+            raise ValueError("backup_name and target_collection_name are required")
+        resp = self._request(
+            "POST", f"/backup/{backup_name}/restore",
+            json={"target_collection_name": target_collection_name},
+        )
+        if resp.status_code not in (200, 201):
+            raise_exception(resp.status_code, resp.text)
+        try:
+            return resp.json()
+        except ValueError:
+            return {"message": resp.text}
+
+    def delete_backup(self, backup_name: str) -> dict:
+        """Delete a backup."""
+        if not backup_name:
+            raise ValueError("backup_name is required")
+        resp = self._request("DELETE", f"/backup/{backup_name}")
+        if resp.status_code not in (200, 204):
+            raise_exception(resp.status_code, resp.text)
+        return {"message": (resp.text or "Backup deleted successfully")}
+
+    def download_backup(self, backup_name: str, dest_path: str, db_name: str = None) -> str:
+        """Download a backup as a .tar to ``dest_path``. Returns the path written.
+
+        Uses query-param auth (the download endpoint takes ``?token=``). With the
+        root token, pass ``db_name`` to target a specific database's backup.
+        """
+        if not backup_name or not dest_path:
+            raise ValueError("backup_name and dest_path are required")
+        params = {"token": self.token}
+        if db_name:
+            params["db"] = db_name
+        url = f"{self.base_url}/backup/{backup_name}/download"
         if self.library == HTTP_REQUESTS_LIBRARY:
-            session = self._get_session()
-            response = session.get(url, headers=headers)
-        else:  # httpx1.1 or httpx2
-            client = self._get_client()
-            response = client.get(url, headers=headers)
-
-        # Handle response
-        if response.status_code != 200:
-            raise_exception(response.status_code, response.text)
-
-        data = response.json()
-
-        # Validate index metadata
-        metadata = IndexMetadata(**data)
-
-        # Create Index object with appropriate manager
-        if self.library == HTTP_REQUESTS_LIBRARY:
-            idx = Index(
-                name=name,
-                token=self.token,
-                url=self.base_url,
-                version=self.version,
-                params=to_dict(metadata, by_alias=True),
-                session_client_manager=self.session_manager,
-            )
+            resp = self._get_session().get(url, params=params)
         else:
-            idx = Index(
-                name=name,
-                token=self.token,
-                url=self.base_url,
-                version=self.version,
-                params=to_dict(metadata, by_alias=True),
-                session_client_manager=self.client_manager,
-            )
+            resp = self._get_client().get(url, params=params)
+        if resp.status_code != 200:
+            raise_exception(resp.status_code, resp.text)
+        with open(dest_path, "wb") as fh:
+            fh.write(resp.content)
+        return dest_path
 
-        return idx
+    def upload_backup(self, file_path: str) -> dict:
+        """Upload a backup ``.tar`` file (multipart) into this database."""
+        fname = os.path.basename(file_path)
+        if not fname.endswith(".tar"):
+            raise ValueError("backup file must be a .tar")
+        with open(file_path, "rb") as fh:
+            content = fh.read()
+        url = f"{self.base_url}/backup/upload"
+        headers = {"Authorization": self.token}
+        files = {"backup": (fname, content, "application/x-tar")}
+        if self.library == HTTP_REQUESTS_LIBRARY:
+            resp = self._get_session().post(url, headers=headers, files=files)
+        else:
+            resp = self._get_client().post(url, headers=headers, files=files)
+        if resp.status_code not in (200, 201):
+            raise_exception(resp.status_code, resp.text)
+        try:
+            return resp.json()
+        except ValueError:
+            return {"message": resp.text}
 
     def __del__(self):
         """

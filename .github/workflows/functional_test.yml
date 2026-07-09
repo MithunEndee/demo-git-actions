@@ -1,23 +1,24 @@
 name: Functional Tests
 
-# Runs the Endee client functional test suite against Endee Serverless.
-# See tests/README.md for full usage details.
+# Manual trigger only — run from the Actions tab.
+# Provide a token and optionally a base URL and root token.
 
 on:
-  pull_request:
-    branches:
-      - main
-      - master
   workflow_dispatch:
     inputs:
       token:
-        description: "Endee Serverless API token. Leave blank to use the ENDEE_TOKEN secret."
+        description: "Database API token (required)"
+        required: true
+        type: string
+
+      base_url:
+        description: "API base URL — e.g. http://your-server:8050/api/v2. Leave blank to use the default Endee endpoint."
         required: false
         default: ""
         type: string
 
-      base_url:
-        description: "API base URL override (e.g. http://localhost:8080/api/v1). Leave blank to derive from token."
+      root_token:
+        description: "Root token (NDD_ROOT_TOKEN) — optional. When provided, admin tests are included."
         required: false
         default: ""
         type: string
@@ -26,19 +27,17 @@ jobs:
   functional-test:
     name: Endee Functional Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     permissions:
       contents: read
-      checks: write
-      pull-requests: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
@@ -47,12 +46,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .
-          pip install pytest pytest-html pytest-timeout numpy pytest-github-actions-annotate-failures
+          pip install pytest pytest-timeout numpy
 
       - name: Verify server connectivity
         env:
-          ENDEE_TOKEN:    ${{ inputs.token || secrets.ENDEE_TOKEN }}
-          ENDEE_BASE_URL: ${{ inputs.base_url || secrets.ENDEE_BASE_URL }}
+          ENDEE_TOKEN:    ${{ inputs.token }}
+          ENDEE_BASE_URL: ${{ inputs.base_url }}
         run: |
           python - <<'PYEOF'
           import os, sys
@@ -70,8 +69,9 @@ jobs:
               c.set_base_url(base_url)
 
           try:
-              indexes = c.list_indexes()
-              print(f"Connected successfully. Existing indexes: {len(indexes)}")
+              health = c.health()
+              cols   = c.list_collections()
+              print(f"Server is up (status={health.get('status')}). Existing collections: {len(cols)}")
           except Exception as e:
               print(f"Connection failed: {e}", file=sys.stderr)
               sys.exit(1)
@@ -79,50 +79,34 @@ jobs:
 
       - name: Run functional tests
         env:
-          ENDEE_TOKEN:    ${{ inputs.token || secrets.ENDEE_TOKEN }}
-          ENDEE_BASE_URL: ${{ inputs.base_url || secrets.ENDEE_BASE_URL }}
+          ENDEE_TOKEN:    ${{ inputs.token }}
+          ENDEE_BASE_URL: ${{ inputs.base_url }}
+          NDD_ROOT_TOKEN: ${{ inputs.root_token }}
         run: |
           pytest tests/ \
             -v \
             --timeout=120 \
             --tb=short \
             -p no:warnings \
-            --junit-xml=test-results.xml \
-            --html=test-report.html \
-            --self-contained-html
+            --junit-xml=test-results.xml
 
-      - name: Write test summary
+      - name: Write job summary
         if: always()
-        env:
-          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.event.pull_request.head.sha || github.sha }}
-          BRANCH: ${{ github.head_ref || github.ref_name }}
-          BRANCH_URL: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.head_ref || github.ref_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           python - <<'PYEOF'
           import xml.etree.ElementTree as ET, os, sys
 
           summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "")
-          commit_sha   = os.environ.get("COMMIT_SHA", "unknown")[:7]
-          commit_url   = os.environ.get("COMMIT_URL", "")
-          branch       = os.environ.get("BRANCH", "")
-          branch_url   = os.environ.get("BRANCH_URL", "")
-          pr_number    = os.environ.get("PR_NUMBER", "")
-          pr_url       = os.environ.get("PR_URL", "")
-
           if not summary_file:
-              print("GITHUB_STEP_SUMMARY not set - skipping summary")
               sys.exit(0)
 
-          def write_out(content):
+          def write(content):
               with open(summary_file, "a") as f:
                   f.write(content)
 
           try:
-              tree = ET.parse("test-results.xml")
-              root = tree.getroot()
+              tree  = ET.parse("test-results.xml")
+              root  = tree.getroot()
               suite = root if root.tag == "testsuite" else root.find("testsuite")
               if suite is None:
                   suite = root
@@ -133,23 +117,20 @@ jobs:
               skipped  = int(suite.get("skipped",  0))
               passed   = total - failures - errors - skipped
               elapsed  = float(suite.get("time",   0))
-
               mins, secs = divmod(int(elapsed), 60)
               duration = f"{mins}m {secs}s" if mins else f"{secs}s"
 
+              icon = "✅" if (failures + errors) == 0 else "❌"
+
               lines = [
-                  "## Endee Functional Test Report",
+                  f"## {icon} Endee Functional Test Results",
                   "",
-                  "**Commit:** " + f"[`{commit_sha}`]({commit_url})" +
-                      (f" | **Branch:** [`{branch}`]({branch_url})" if branch else "") +
-                      (f" | **PR:** [#{pr_number}]({pr_url})" if pr_number else ""),
-                  "",
-                  "| Result  | Count |",
-                  "|---------|------:|",
-                  f"| Passed  | {passed} |",
-                  f"| Failed  | {failures} |",
-                  f"| Errors  | {errors} |",
-                  f"| Skipped | {skipped} |",
+                  "| Result   | Count |",
+                  "|----------|------:|",
+                  f"| Passed   | {passed} |",
+                  f"| Failed   | {failures} |",
+                  f"| Errors   | {errors} |",
+                  f"| Skipped  | {skipped} |",
                   f"| **Total** | **{total}** |",
                   "",
                   f"**Duration:** {duration}",
@@ -162,16 +143,16 @@ jobs:
                   for tag in ("failure", "error"):
                       node = tc.find(tag)
                       if node is not None:
-                          name      = tc.get("name", "unknown")
-                          classname = tc.get("classname", "")
-                          msg       = (node.get("message") or node.text or "").strip().split("\n")[0][:200]
-                          failed_cases.append((classname, name, msg))
+                          name = tc.get("name", "unknown")
+                          cls  = tc.get("classname", "")
+                          msg  = (node.get("message") or node.text or "").strip().split("\n")[0][:200]
+                          failed_cases.append((cls, name, msg))
                   skip_node = tc.find("skipped")
                   if skip_node is not None:
-                      name      = tc.get("name", "unknown")
-                      classname = tc.get("classname", "")
-                      reason    = (skip_node.get("message") or "No reason given").strip()
-                      skipped_cases.append((classname, name, reason))
+                      name   = tc.get("name", "unknown")
+                      cls    = tc.get("classname", "")
+                      reason = (skip_node.get("message") or "No reason given").strip()
+                      skipped_cases.append((cls, name, reason))
 
               if failed_cases:
                   lines += [
@@ -181,15 +162,15 @@ jobs:
                       "| Test | Reason |",
                       "|------|--------|",
                   ]
-                  for classname, name, msg in failed_cases:
-                      lines.append(f"| `{classname}::{name}` | {msg} |")
+                  for cls, name, msg in failed_cases:
+                      lines.append(f"| `{cls}::{name}` | {msg} |")
                   lines += ["", "</details>", ""]
 
               if skipped_cases:
                   from collections import defaultdict
                   by_reason = defaultdict(list)
-                  for classname, name, reason in skipped_cases:
-                      by_reason[reason].append(f"`{classname}::{name}`")
+                  for cls, name, reason in skipped_cases:
+                      by_reason[reason].append(f"`{cls}::{name}`")
 
                   lines += [
                       "<details>",
@@ -204,45 +185,19 @@ jobs:
                       lines.append("")
                   lines += ["</details>", ""]
 
-              write_out("\n".join(lines) + "\n")
+              write("\n".join(lines) + "\n")
               print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
-              write_out(f"## Test Report\n\n**Commit:** `{commit_sha}`\n\n`test-results.xml` not found - pytest may not have run.\n")
+              write("## Test Report\n\n`test-results.xml` not found — pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF
 
-      - name: Post Test Summary to PR
-        if: always() && github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          MARKER="<!-- endee-functional-tests -->"
-          COMMIT="${{ github.event.pull_request.head.sha }}"
-          BRANCH="${{ github.head_ref }}"
-          BODY="${MARKER}
-          **Endee Functional Tests** - [View full report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          Commit [\`${COMMIT:0:7}\`](${{ github.server_url }}/${{ github.repository }}/commit/${COMMIT}) on [\`${BRANCH}\`](${{ github.server_url }}/${{ github.repository }}/tree/${BRANCH})"
-
-          COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
-            --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -1)
-
-          if [ -n "$COMMENT_ID" ]; then
-            gh api repos/${{ github.repository }}/issues/comments/$COMMENT_ID \
-              -X DELETE > /dev/null
-            echo "Deleted previous comment"
-          fi
-
-          gh pr comment ${{ github.event.pull_request.number }} --body "$BODY"
-          echo "Posted updated comment"
-
-      - name: Upload test artifacts
+      - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: endee-functional-test-results
-          path: |
-            test-report.html
-            test-results.xml
+          path: test-results.xml
           retention-days: 7

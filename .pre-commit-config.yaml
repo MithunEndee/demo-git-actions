@@ -1,0 +1,16 @@
+repos:
+-   repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.14
+    hooks:
+      - id: ruff
+        args: [ --fix ]
+      - id: ruff-format
+
+-   repo: local
+    hooks:
+      - id: integration-tests
+        name: Integration Tests
+        entry: bash -c 'PYTHONPATH=. python -m unittest tests.test -v'
+        language: system
+        stages: [pre-push]
+        pass_filenames: false

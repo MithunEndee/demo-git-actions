@@ -1,40 +1,56 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+"""
+.gitignore for Endee Vector Database Client
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-*.cover
+This file specifies intentionally untracked files that Git should ignore.
+Includes development environments, build artifacts, and system files.
+"""
 
-# IDE
+# Development Environment
+# =======================
+# VSCode settings and workspace files
 .vscode/
-.idea/
-*.swp
-*.swo
 
-# OS
+# JetBrains IDEs (PyCharm, IntelliJ IDEA, etc.)
+.idea/
+
+# Python virtual environment
+env/
+env/*
+venv/
+venv/*
+
+
+# Python Build Artifacts
+# ======================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+
+# Distribution / packaging
+build/
+build/*
+dist/
+dist/*
+*.egg-info/
+
+
+# Native Libraries
+# ================
+# Native library binaries
+ndpy/libnd
+ndpy/libnd/*
+
+
+# Scripts and Utilities
+# =====================
+# Local development scripts
+scripts/
+scripts/*
+
+
+# Operating System Files
+# ======================
+# macOS system files
 .DS_Store
-Thumbs.db
+*.DS_Store
+
