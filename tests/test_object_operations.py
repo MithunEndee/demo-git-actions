@@ -1,10 +1,9 @@
 """
 Tests for Collection.upsert() and Collection.delete_object().
 
-Covers upsert counts, meta/filter preservation, overwrite semantics,
-batch size limits, empty batches, Unicode meta, all precisions and
-space types, binary vectors, NaN/Inf rejection, duplicate ID detection,
-unknown field name rejection, and delete_object removal from search.
+Covers single and batch upsert, overwrite, meta/filter preservation, NaN/Inf
+rejection, duplicate ID detection, batch size limits, all precisions and
+space types, and delete_object removal from search results.
 """
 
 import pytest

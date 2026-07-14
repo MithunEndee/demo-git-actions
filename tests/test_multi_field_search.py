@@ -1,12 +1,8 @@
 """
-Tests for multi-field search behaviour:
-  - Multiple fields WITHOUT reranker -> per-field dict result format
-  - Multiple fields WITH reranker='rrf' -> fused flat list via rerank()
-  - field_weights parameter for RRF (passed to rerank())
-  - rrf_k parameter (passed to rerank())
-  - Per-field limit and ef_search in the query dict format
+Tests for multi-field search with and without reranking.
 
-Uses the populated_hybrid_collection fixture (dense + sparse fields).
+Covers per-field dict result format, RRF fusion via reranker='rrf',
+field_weights, rrf_k, per-field limits, ef_search, and filters.
 """
 
 import pytest
@@ -28,7 +24,6 @@ from helpers import (
 )
 
 from endee import rerank
-
 
 # -- multi-field search WITHOUT reranker (per-field format) --------------------
 
@@ -155,8 +150,14 @@ def test_multi_field_rrf_returns_flat_list(populated_hybrid_collection):
     si, sv = sparse_vec(seed=10)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=10), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=10),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         },
     )
     results = rerank(raw, limit=10)["results"]
@@ -171,8 +172,14 @@ def test_multi_field_rrf_result_has_required_keys(populated_hybrid_collection):
     si, sv = sparse_vec(seed=11)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=11), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=11),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         },
     )
     results = rerank(raw, limit=5)["results"]
@@ -187,8 +194,14 @@ def test_multi_field_rrf_limit_respected(populated_hybrid_collection):
     si, sv = sparse_vec(seed=12)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=12), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=12),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         },
     )
     results = rerank(raw, limit=8)["results"]
@@ -201,8 +214,14 @@ def test_multi_field_rrf_results_sorted(populated_hybrid_collection):
     si, sv = sparse_vec(seed=13)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=13), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=13),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         },
     )
     results = rerank(raw, limit=10)["results"]
@@ -219,11 +238,19 @@ def test_rrf_field_weights_accepted(populated_hybrid_collection):
     si, sv = sparse_vec(seed=20)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=20), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=20),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         },
     )
-    results = rerank(raw, limit=5, field_weights={DENSE_FIELD: 0.7, SPARSE_FIELD: 0.3})["results"]
+    results = rerank(raw, limit=5, field_weights={DENSE_FIELD: 0.7, SPARSE_FIELD: 0.3})[
+        "results"
+    ]
     assert isinstance(results, list)
 
 
@@ -233,11 +260,19 @@ def test_rrf_field_weights_equal_split(populated_hybrid_collection):
     si, sv = sparse_vec(seed=21)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=21), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=21),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         },
     )
-    results = rerank(raw, limit=5, field_weights={DENSE_FIELD: 0.5, SPARSE_FIELD: 0.5})["results"]
+    results = rerank(raw, limit=5, field_weights={DENSE_FIELD: 0.5, SPARSE_FIELD: 0.5})[
+        "results"
+    ]
     assert isinstance(results, list)
     assert len(results) > 0
 
@@ -248,8 +283,14 @@ def test_rrf_field_weights_not_summing_to_one_raises(populated_hybrid_collection
     si, sv = sparse_vec(seed=22)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=22), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=22),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         },
     )
     with pytest.raises(ValueError, match="sum"):
@@ -262,8 +303,14 @@ def test_rrf_field_weights_missing_field_raises(populated_hybrid_collection):
     si, sv = sparse_vec(seed=23)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=23), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=23),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         },
     )
     with pytest.raises(ValueError, match="missing"):
@@ -280,8 +327,14 @@ def test_rrf_k_parameter_accepted(populated_hybrid_collection, rrf_k):
     si, sv = sparse_vec(seed=30)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=30), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=30),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         },
     )
     results = rerank(raw, limit=5, rrf_k=rrf_k)["results"]
@@ -315,8 +368,14 @@ def test_multi_field_rrf_with_filter(populated_hybrid_collection):
     si, sv = sparse_vec(seed=50)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=50), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=50),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         },
         filter=[{"tags": {"$eq": "important"}}],
     )
@@ -338,7 +397,7 @@ def test_multi_field_no_reranker_with_filter(populated_hybrid_collection):
     )["results"]
     # results is a per-field dict; check all hits in each field
     if isinstance(results, dict):
-        for field_name, hits in results.items():
+        for _, hits in results.items():
             for hit in hits:
                 assert parse_filter_field(hit)["category"] == "A"
 

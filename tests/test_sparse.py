@@ -1,9 +1,8 @@
 """
 Tests for sparse vector field operations.
 
-Covers collection creation (default and BM25 sparse models), upsert,
-search (result structure, limit, ef_search, similarity ordering),
-describe, meta round-trips, and delete_object.
+Covers collection creation (default and BM25 models), upsert, search (result
+structure, limit, similarity ordering), describe, meta round-trips, and delete_object.
 """
 
 import pytest
@@ -18,7 +17,7 @@ from helpers import (
     uid,
 )
 
-# -- Collection creation -------------------------------------------------------
+# -- collection creation ------------------------------------------------------
 
 
 def test_create_sparse_collection(client):
@@ -44,7 +43,7 @@ def test_create_sparse_collection_bm25(client):
         safe_delete(client, name)
 
 
-# -- Upsert --------------------------------------------------------------------
+# -- upsert -------------------------------------------------------------------
 
 
 def test_sparse_upsert_single_object(empty_sparse_collection):
@@ -114,7 +113,7 @@ def test_sparse_upsert_overwrite(empty_sparse_collection):
     assert result.get("upserted") == 1
 
 
-# -- Search --------------------------------------------------------------------
+# -- search -------------------------------------------------------------------
 
 
 def test_sparse_search_returns_results(populated_sparse_collection):
@@ -174,7 +173,7 @@ def test_sparse_search_ef_search_accepted(populated_sparse_collection, ef_search
     assert isinstance(results, list)
 
 
-# -- Meta round-trip -----------------------------------------------------------
+# -- meta round-trip ----------------------------------------------------------
 
 
 def test_sparse_meta_round_trips(empty_sparse_collection):
@@ -216,7 +215,9 @@ def test_sparse_delete_object_removed_from_search(populated_sparse_collection):
     collection.delete_object(target)
     si, sv = sparse_vec(seed=41)
     results = collection.search(
-        fields={SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS}}
+        fields={
+            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS}
+        }
     )["results"][SPARSE_FIELD]
     assert target not in {r["id"] for r in results}
 

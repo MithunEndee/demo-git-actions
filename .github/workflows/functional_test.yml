@@ -1,6 +1,6 @@
 name: Functional Tests
 
-# Manual trigger only — run from the Actions tab.
+# Manual trigger only - run from the Actions tab.
 # Provide a token and optionally a base URL and root token.
 
 on:
@@ -12,13 +12,13 @@ on:
         type: string
 
       base_url:
-        description: "API base URL — e.g. http://localhost:8080/api/v2. Leave blank to use the default Endee endpoint."
+        description: "API base URL - e.g. http://localhost:8080/api/v2. Leave blank to use the default Endee endpoint."
         required: false
         default: ""
         type: string
 
       root_token:
-        description: "Root token (NDD_ROOT_TOKEN) — optional. When provided, admin tests are included."
+        description: "Root token (NDD_ROOT_TOKEN) - optional. When provided, admin tests are included."
         required: false
         default: ""
         type: string
@@ -186,7 +186,7 @@ jobs:
               print(f"Summary written: {passed}/{total} passed in {duration}")
 
           except FileNotFoundError:
-              write("## Test Report\n\n`test-results.xml` not found — pytest may not have run.\n")
+              write("## Test Report\n\n`test-results.xml` not found - pytest may not have run.\n")
           except Exception as exc:
               print(f"Summary generation failed: {exc}", file=sys.stderr)
           PYEOF

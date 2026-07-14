@@ -1,21 +1,16 @@
 """
-Tests for backup operations on the Endee database:
-  - create_backup()     - start an async collection backup
-  - list_backups()      - list all backups for this database
-  - active_backup()     - check in-progress backup status
-  - backup_info()       - get metadata for a single backup
-  - restore_backup()    - restore a backup into a new collection
-  - delete_backup()     - delete a named backup
+Tests for backup operations across all collection types.
 
-Backups are ASYNC on the server: create_backup() returns 202 immediately with
-status="in_progress". Tests that need a *completed* backup (info, restore,
-delete) use wait_for_backup(), which polls list_backups() until the backup name
-appears - the server only adds an entry once the backup is fully written.
-
-Client-side validation (empty name) is also covered.
-download_backup / upload_backup require filesystem access and are out of scope.
+Covers create_backup, list_backups, active_backup, backup_info, restore_backup,
+delete_backup, download_backup, and upload_backup. Backups are async -
+create_backup returns immediately with status="in_progress"; tests needing a
+completed backup poll via wait_for_backup(). Downloaded files are written to
+a tempfile.mkdtemp() directory and cleaned up in finally blocks.
 """
 
+import os
+import shutil
+import tempfile
 import time
 
 import pytest
@@ -40,8 +35,17 @@ from helpers import (
 
 from endee.exceptions import EndeeException
 
-
 # -- helpers ------------------------------------------------------------------
+
+
+def _backup_names(client) -> set:
+    """Return the set of all backup names currently on the server."""
+    result = client.list_backups()
+    if isinstance(result, list):
+        return {b.get("name") for b in result if isinstance(b, dict) and b.get("name")}
+    if isinstance(result, dict):
+        return set(result.keys())
+    return set()
 
 
 def _delete_backup_silently(client, name: str) -> None:
@@ -62,9 +66,7 @@ def wait_for_backup(client, backup_name: str, timeout: int = 120) -> None:
         result = client.list_backups()
         if isinstance(result, list):
             names = [b.get("name") for b in result if isinstance(b, dict)]
-            found = backup_name in names or any(
-                backup_name in str(b) for b in result
-            )
+            found = backup_name in names or any(backup_name in str(b) for b in result)
         else:
             found = backup_name in result or backup_name in str(result)
         if found:
@@ -89,9 +91,9 @@ def cleanup_backup(client, backup_name: str, timeout: int = 120) -> None:
     try:
         result = client.list_backups()
         if isinstance(result, list):
-            in_list = backup_name in [b.get("name") for b in result if isinstance(b, dict)] or any(
-                backup_name in str(b) for b in result
-            )
+            in_list = backup_name in [
+                b.get("name") for b in result if isinstance(b, dict)
+            ] or any(backup_name in str(b) for b in result)
         else:
             in_list = backup_name in result or backup_name in str(result)
 
@@ -279,9 +281,11 @@ def test_backup_info_contains_name(client, populated_collection):
         wait_for_backup(client, backup_name)
         result = client.backup_info(backup_name=backup_name)
         assert isinstance(result, dict)
-        assert "original_index" in result or "params" in result or backup_name in str(result), (
-            f"Unexpected backup_info() response: {result}"
-        )
+        assert (
+            "original_index" in result
+            or "params" in result
+            or backup_name in str(result)
+        ), f"Unexpected backup_info() response: {result}"
     finally:
         cleanup_backup(client, backup_name)
 
@@ -490,9 +494,13 @@ def test_restore_backup_mv_collection_is_searchable(client):
         col.upsert([make_mv_item(i) for i in range(10)])
         col.create_backup(name=backup_name)
         wait_for_backup(client, backup_name)
-        client.restore_backup(backup_name=backup_name, target_collection_name=target_name)
+        client.restore_backup(
+            backup_name=backup_name, target_collection_name=target_name
+        )
         restored = client.get_collection(target_name)
-        results = restored.search(fields={MV_FIELD: {"query": multi_vec(seed=0), "limit": 5}})["results"][MV_FIELD]
+        results = restored.search(
+            fields={MV_FIELD: {"query": multi_vec(seed=0), "limit": 5}}
+        )["results"][MV_FIELD]
         assert isinstance(results, list)
         assert len(results) > 0
     finally:
@@ -531,7 +539,9 @@ def test_restore_backup_sparse_collection_is_searchable(client):
         col.upsert([make_sparse_item(i) for i in range(10)])
         col.create_backup(name=backup_name)
         wait_for_backup(client, backup_name)
-        client.restore_backup(backup_name=backup_name, target_collection_name=target_name)
+        client.restore_backup(
+            backup_name=backup_name, target_collection_name=target_name
+        )
         restored = client.get_collection(target_name)
         si, sv = sparse_vec(seed=0)
         results = restored.search(
@@ -579,7 +589,9 @@ def test_restore_backup_multi_field_collection_is_searchable(client):
         col.upsert([make_item(i, dim=HYBRID_DIM, with_sparse=True) for i in range(10)])
         col.create_backup(name=backup_name)
         wait_for_backup(client, backup_name)
-        client.restore_backup(backup_name=backup_name, target_collection_name=target_name)
+        client.restore_backup(
+            backup_name=backup_name, target_collection_name=target_name
+        )
         restored = client.get_collection(target_name)
 
         # Dense field search
@@ -626,7 +638,9 @@ def test_backup_full_lifecycle(client, populated_collection):
         assert isinstance(info, dict)
 
         # Restore
-        client.restore_backup(backup_name=backup_name, target_collection_name=target_name)
+        client.restore_backup(
+            backup_name=backup_name, target_collection_name=target_name
+        )
         assert target_name in get_collection_names(client)
 
         # Delete backup
@@ -643,3 +657,220 @@ def test_backup_full_lifecycle(client, populated_collection):
     finally:
         cleanup_backup(client, backup_name)
         safe_delete(client, target_name)
+
+
+# -- download_backup (Endee client) --------------------------------------------
+
+
+def test_download_backup_returns_path(client, populated_collection):
+    """download_backup() must return the local path where the file was written."""
+    _, collection = populated_collection
+    backup_name = uid("bkdl")
+    tmp_dir = tempfile.mkdtemp()
+    local_path = os.path.join(tmp_dir, f"{backup_name}.tar")
+    try:
+        collection.create_backup(name=backup_name)
+        wait_for_backup(client, backup_name)
+        result = client.download_backup(backup_name=backup_name, dest_path=local_path)
+        assert result == local_path
+    finally:
+        cleanup_backup(client, backup_name)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_download_backup_file_exists_and_nonempty(client, populated_collection):
+    """download_backup() must write a non-empty .tar file to the specified path."""
+    _, collection = populated_collection
+    backup_name = uid("bkdlf")
+    tmp_dir = tempfile.mkdtemp()
+    local_path = os.path.join(tmp_dir, f"{backup_name}.tar")
+    try:
+        collection.create_backup(name=backup_name)
+        wait_for_backup(client, backup_name)
+        client.download_backup(backup_name=backup_name, dest_path=local_path)
+        assert os.path.exists(local_path), f"Expected file at {local_path}"
+        assert os.path.getsize(local_path) > 0, "Downloaded file is empty"
+    finally:
+        cleanup_backup(client, backup_name)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_download_backup_empty_name_raises(client):
+    """download_backup() with empty backup_name must raise ValueError (client-side)."""
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        with pytest.raises(ValueError):
+            client.download_backup(
+                backup_name="", dest_path=os.path.join(tmp_dir, "x.tar")
+            )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_download_backup_empty_dest_raises(client):
+    """download_backup() with empty dest_path must raise ValueError (client-side)."""
+    with pytest.raises(ValueError):
+        client.download_backup(backup_name="some_backup", dest_path="")
+
+
+def test_download_backup_nonexistent_raises(client):
+    """download_backup() for a non-existent backup must raise EndeeException."""
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        with pytest.raises(EndeeException):
+            client.download_backup(
+                backup_name="definitely_does_not_exist_xyz_99999",
+                dest_path=os.path.join(tmp_dir, "ghost.tar"),
+            )
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# -- upload_backup (Endee client) ----------------------------------------------
+
+
+def test_upload_backup_returns_dict(client, populated_collection):
+    """upload_backup() must return a dict."""
+    _, collection = populated_collection
+    backup_name = uid("bkul")
+    upload_name = uid(
+        "bkulup"
+    )  # distinct name so upload doesn't conflict with original
+    tmp_dir = tempfile.mkdtemp()
+    local_path = os.path.join(tmp_dir, f"{upload_name}.tar")
+    try:
+        collection.create_backup(name=backup_name)
+        wait_for_backup(client, backup_name)
+        client.download_backup(backup_name=backup_name, dest_path=local_path)
+        result = client.upload_backup(file_path=local_path)
+        wait_for_backup(client, upload_name)
+        assert isinstance(result, dict)
+    finally:
+        cleanup_backup(client, backup_name)
+        cleanup_backup(client, upload_name)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_upload_backup_appears_in_list_backups(client, populated_collection):
+    """An uploaded backup must appear in list_backups()."""
+    _, collection = populated_collection
+    backup_name = uid("bkulst")
+    upload_name = uid(
+        "bkulstup"
+    )  # distinct name so upload doesn't conflict with original
+    tmp_dir = tempfile.mkdtemp()
+    local_path = os.path.join(tmp_dir, f"{upload_name}.tar")
+    try:
+        collection.create_backup(name=backup_name)
+        wait_for_backup(client, backup_name)
+        client.download_backup(backup_name=backup_name, dest_path=local_path)
+        client.upload_backup(file_path=local_path)
+        wait_for_backup(client, upload_name)
+        assert upload_name in _backup_names(client), (
+            f"Uploaded backup '{upload_name}' not found in list_backups()"
+        )
+    finally:
+        cleanup_backup(client, backup_name)
+        cleanup_backup(client, upload_name)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_upload_backup_non_tar_raises(client):
+    """upload_backup() with a non-.tar file must raise ValueError (client-side)."""
+    tmp_dir = tempfile.mkdtemp()
+    bad_path = os.path.join(tmp_dir, "backup.zip")
+    try:
+        with open(bad_path, "wb") as fh:
+            fh.write(b"fake content")
+        with pytest.raises(ValueError):
+            client.upload_backup(file_path=bad_path)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# -- download + upload roundtrip / lifecycle -----------------------------------
+
+
+def test_download_upload_roundtrip(client, populated_collection):
+    """Download a backup then re-upload it under a new name; both must exist in list_backups()."""
+    _, collection = populated_collection
+    backup_name = uid("bkrt")
+    upload_name = uid("bkrtup")  # distinct name avoids server conflict on re-upload
+    tmp_dir = tempfile.mkdtemp()
+    local_path = os.path.join(tmp_dir, f"{upload_name}.tar")
+    try:
+        collection.create_backup(name=backup_name)
+        wait_for_backup(client, backup_name)
+
+        # Download using the upload filename (server will register as upload_name)
+        client.download_backup(backup_name=backup_name, dest_path=local_path)
+        assert os.path.exists(local_path)
+
+        # Upload and wait for it to appear in list_backups()
+        client.upload_backup(file_path=local_path)
+        wait_for_backup(client, upload_name)
+
+        # Both original and uploaded must be present
+        current = _backup_names(client)
+        assert backup_name in current, f"Original backup '{backup_name}' missing"
+        assert upload_name in current, f"Uploaded backup '{upload_name}' missing"
+    finally:
+        cleanup_backup(client, backup_name)
+        cleanup_backup(client, upload_name)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_download_upload_restore_lifecycle(client, populated_collection):
+    """Full lifecycle: create -> download -> upload -> restore -> searchable -> delete all."""
+    _, collection = populated_collection
+    backup_name = uid("bklc")
+    upload_name = uid("bklcup")  # distinct name avoids server conflict on re-upload
+    tmp_dir = tempfile.mkdtemp()
+    local_path = os.path.join(tmp_dir, f"{upload_name}.tar")
+    target_name = uid("uplrstcol")
+    upload_deleted = False
+    try:
+        # Create and wait
+        collection.create_backup(name=backup_name)
+        wait_for_backup(client, backup_name)
+
+        # Download to local disk
+        client.download_backup(backup_name=backup_name, dest_path=local_path)
+        assert os.path.exists(local_path)
+        assert os.path.getsize(local_path) > 0
+
+        # Upload and wait for it to appear (server registers as upload_name)
+        client.upload_backup(file_path=local_path)
+        wait_for_backup(client, upload_name)
+
+        # Restore from the uploaded backup into a new collection
+        client.restore_backup(
+            backup_name=upload_name, target_collection_name=target_name
+        )
+        assert target_name in get_collection_names(client), (
+            f"Restored collection '{target_name}' not found after upload+restore"
+        )
+
+        # Restored collection must be searchable
+        restored = client.get_collection(target_name)
+        results = restored.search(
+            fields={DENSE_FIELD: {"query": dense_vec(seed=0), "limit": 5}}
+        )["results"][DENSE_FIELD]
+        assert isinstance(results, list)
+        assert len(results) > 0
+
+        # Delete both the original and uploaded backup from the server
+        client.delete_backup(backup_name=backup_name)
+        client.delete_backup(backup_name=upload_name)
+        upload_deleted = True
+
+        # Verify both are gone
+        remaining = _backup_names(client)
+        assert backup_name not in remaining
+        assert upload_name not in remaining
+    finally:
+        cleanup_backup(client, backup_name)
+        if not upload_deleted:
+            cleanup_backup(client, upload_name)
+        safe_delete(client, target_name)
+        shutil.rmtree(tmp_dir, ignore_errors=True)

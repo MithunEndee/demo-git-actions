@@ -1,26 +1,18 @@
 """
 Tests for Collection.delete_by_filter() - bulk-delete objects matching a filter.
 
-Covers: return structure, correctness, count accuracy, various filter operators,
-multi-condition AND, no-match case, and client-side validation.
-
-Filter layout in make_item (N_VECTORS = 50):
-  category : "A" | "B" | "C"        (i % 3)
-  priority : 0..4                   (i % 5)
-  score    : 0..49                  (i itself)
-  tags     : "important" | "normal" (even/odd i)
-
-Expected counts:
-  category "A"           -> 17  (i % 3 == 0)
-  category "B"           -> 17  (i % 3 == 1)
-  category "C"           -> 16  (i % 3 == 2)
-  tags "important"       -> 25  (even i)
-  tags "normal"          -> 25  (odd i)
-  score in [40, 49]      -> 10
+Covers return structure, count accuracy, filter operators ($eq, $in, $range,
+$gt, $gte, $lt, $lte, AND conditions), no-match case, and client-side validation.
 """
 
-from helpers import DENSE_FIELD, MV_FIELD, N_VECTORS, dense_vec, multi_vec, parse_filter_field
-
+from helpers import (
+    DENSE_FIELD,
+    MV_FIELD,
+    N_VECTORS,
+    dense_vec,
+    multi_vec,
+    parse_filter_field,
+)
 
 # -- return structure ---------------------------------------------------------
 

@@ -1,12 +1,11 @@
 """
 Tests for Collection.shrink() - defragments on-disk storage after deletions.
 
-Covers: response structure, searchability after shrink, and shrink after
-delete operations - for both dense and multi_vector collections.
+Covers response structure, searchability after shrink, and shrink after delete
+on both dense and multi_vector collections.
 """
 
-from helpers import DENSE_FIELD, MV_FIELD, dense_vec, make_mv_field, multi_vec, safe_delete, uid
-
+from helpers import DENSE_FIELD, MV_FIELD, dense_vec, multi_vec
 
 # -- dense collection ----------------------------------------------------------
 

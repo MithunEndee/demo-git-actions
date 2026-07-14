@@ -1,14 +1,12 @@
 """
 Tests for multi_vector (ColBERT-style) field operations.
 
-Covers collection creation with all pooling methods and precision/space
-combinations, upsert (single vector, many vectors, meta + filter),
-search (limit, ef_search, sorted results), describe, delete_object,
-and mixed dense + multi_vector collections with RRF search.
+Covers collection creation, all pooling methods and precision/space combos,
+upsert, search, get_objects, delete_by_filter, update_filters, shrink,
+rebuild, create_backup, and mixed dense + multi_vector RRF search.
 """
 
 import pytest
-from endee import rerank
 from helpers import (
     ALL_PRECISIONS,
     ALL_SPACE_TYPES,
@@ -25,6 +23,7 @@ from helpers import (
     uid,
 )
 
+from endee import rerank
 from endee.schema import CollectionFieldConfig, CollectionFieldParams
 
 
@@ -72,7 +71,7 @@ def test_create_multi_vector_both_pooling_methods(client, pooling_method):
 
 
 @pytest.mark.parametrize("space_type", ALL_SPACE_TYPES)
-@pytest.mark.parametrize("precision", [p for p in ALL_PRECISIONS if p != "binary"])
+@pytest.mark.parametrize("precision", ALL_PRECISIONS)
 def test_create_multi_vector_all_precision_space_combinations(
     client, precision, space_type
 ):
@@ -215,7 +214,7 @@ def test_multi_vector_search_single_query_vector(populated_mv_collection):
     assert len(results) > 0
 
 
-@pytest.mark.parametrize("ef_search", [32, 64, 128, 256])
+@pytest.mark.parametrize("ef_search", [32, 64, 128, 256, 512])
 def test_multi_vector_search_ef_search_accepted(populated_mv_collection, ef_search):
     """multi_vector search must accept ef_search parameter without error."""
     _, collection = populated_mv_collection

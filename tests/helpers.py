@@ -21,7 +21,14 @@ DENSE_FIELD = "dense"  # Default dense vector field name
 SPARSE_FIELD = "sparse"  # Default sparse vector field name
 MV_FIELD = "colbert"  # Default multi_vector field name
 
-ALL_PRECISIONS = ["float32", "float16", "int16", "int8", "int8e", "binary"]  # all supported precision modes
+ALL_PRECISIONS = [
+    "float32",
+    "float16",
+    "int16",
+    "int8",
+    "int8e",
+    "binary",
+]  # all supported precision modes
 ALL_SPACE_TYPES = ["cosine", "l2", "ip"]  # all supported distance metrics
 
 

@@ -1,11 +1,9 @@
 """
-Tests for admin methods that require NDD_ROOT_TOKEN.
+Tests for admin methods requiring NDD_ROOT_TOKEN.
 
-Covers: database lifecycle (create, get, list, delete), activation/deactivation,
-tier changes, cross-database collection listing and deletion, and admin token
-management (create_token, list_tokens, delete_token).
-
-All tests are automatically skipped if NDD_ROOT_TOKEN is not set.
+Covers database lifecycle (create, get, list, delete), activate/deactivate,
+tier changes, cross-database collection listing, and admin token management.
+Skipped automatically if NDD_ROOT_TOKEN is not set.
 """
 
 import os
@@ -337,7 +335,9 @@ def test_delete_db_collection_removes_from_list(temp_db, admin_client):
     tok_name = uid("tok")
     fresh_token = admin_client.create_token(name, tok_name)
     try:
-        _db_client(fresh_token).create_collection(name=col_name, fields=[make_dense_field()])
+        _db_client(fresh_token).create_collection(
+            name=col_name, fields=[make_dense_field()]
+        )
         admin_client.delete_db_collection(name, col_name)
         cols = admin_client.list_db_collections(name)
         assert col_name not in cols
@@ -355,7 +355,9 @@ def test_delete_db_collection_returns_dict(temp_db, admin_client):
     tok_name = uid("tok")
     fresh_token = admin_client.create_token(name, tok_name)
     try:
-        _db_client(fresh_token).create_collection(name=col_name, fields=[make_dense_field()])
+        _db_client(fresh_token).create_collection(
+            name=col_name, fields=[make_dense_field()]
+        )
         result = admin_client.delete_db_collection(name, col_name)
         assert isinstance(result, dict)
     finally:

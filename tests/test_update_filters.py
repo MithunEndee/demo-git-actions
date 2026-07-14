@@ -1,13 +1,18 @@
 """
 Tests for Collection.update_filters() - update filter tags on existing objects.
 
-Covers: return structure, count accuracy, updated values reflected in search,
-new key addition, multiple objects in one call, and client-side validation.
+Covers return structure, count accuracy, updated values reflected in search,
+new key addition, batch updates, and client-side validation.
 """
 
-import pytest
-from helpers import DENSE_FIELD, MV_FIELD, N_VECTORS, dense_vec, multi_vec, parse_filter_field
-
+from helpers import (
+    DENSE_FIELD,
+    MV_FIELD,
+    N_VECTORS,
+    dense_vec,
+    multi_vec,
+    parse_filter_field,
+)
 
 # -- return structure ---------------------------------------------------------
 
@@ -55,38 +60,26 @@ def test_update_filters_single_object_count(populated_collection):
 def test_update_filters_multiple_objects_count(populated_collection):
     """Updating N objects must return updated == N."""
     _, collection = populated_collection
-    updates = [
-        {"id": f"vec_{i:04d}", "filter": {"category": "Z"}}
-        for i in range(5)
-    ]
+    updates = [{"id": f"vec_{i:04d}", "filter": {"category": "Z"}} for i in range(5)]
     result = collection.update_filters(updates)
     assert result["updated"] == 5
 
 
-# -- correctness: updated values appear in search -----------------------------
-
-
-def test_update_filters_value_reflected_in_search(populated_collection):
-    """After update_filters, the new filter value must appear in search results."""
+def test_update_filters_batch_count_matches(populated_collection):
+    """Batch update count must equal the number of updates submitted."""
     _, collection = populated_collection
-    collection.update_filters(
-        [{"id": "vec_0004", "filter": {"category": "UPDATED"}}]
-    )
-    results = collection.search(
-        fields={DENSE_FIELD: {"query": dense_vec(), "limit": N_VECTORS}},
-        filter=[{"category": {"$eq": "UPDATED"}}],
-    )["results"][DENSE_FIELD]
-    returned_ids = {r["id"] for r in results}
-    assert "vec_0004" in returned_ids
+    updates = [{"id": f"vec_{i:04d}", "filter": {"batch_tag": "yes"}} for i in range(3)]
+    result = collection.update_filters(updates)
+    assert result["updated"] == 3
+
+
+# -- negative membership: old value must not appear after update --------------
 
 
 def test_update_filters_old_value_no_longer_matches(populated_collection):
     """After update, the object must not match a filter on its old value."""
     _, collection = populated_collection
-    # vec_0000 has category "A" (0 % 3 == 0)
-    collection.update_filters(
-        [{"id": "vec_0000", "filter": {"category": "CHANGED"}}]
-    )
+    collection.update_filters([{"id": "vec_0000", "filter": {"category": "CHANGED"}}])
     results = collection.search(
         fields={DENSE_FIELD: {"query": dense_vec(), "limit": N_VECTORS}},
         filter=[{"category": {"$eq": "A"}}],
@@ -95,12 +88,25 @@ def test_update_filters_old_value_no_longer_matches(populated_collection):
     assert "vec_0000" not in returned_ids
 
 
+# -- updated value reflected in search ----------------------------------------
+
+
+def test_update_filters_value_reflected_in_search(populated_collection):
+    """After update_filters, the new filter value must appear in search results."""
+    _, collection = populated_collection
+    collection.update_filters([{"id": "vec_0004", "filter": {"category": "UPDATED"}}])
+    results = collection.search(
+        fields={DENSE_FIELD: {"query": dense_vec(), "limit": N_VECTORS}},
+        filter=[{"category": {"$eq": "UPDATED"}}],
+    )["results"][DENSE_FIELD]
+    returned_ids = {r["id"] for r in results}
+    assert "vec_0004" in returned_ids
+
+
 def test_update_filters_new_value_searchable(populated_collection):
     """Object with updated filter must be searchable by the new value."""
     _, collection = populated_collection
-    collection.update_filters(
-        [{"id": "vec_0000", "filter": {"category": "NEWCAT"}}]
-    )
+    collection.update_filters([{"id": "vec_0000", "filter": {"category": "NEWCAT"}}])
     results = collection.search(
         fields={DENSE_FIELD: {"query": dense_vec(), "limit": N_VECTORS}},
         filter=[{"category": {"$eq": "NEWCAT"}}],
@@ -108,24 +114,16 @@ def test_update_filters_new_value_searchable(populated_collection):
     assert any(r["id"] == "vec_0000" for r in results)
 
 
-# -- adding new filter keys ---------------------------------------------------
-
-
 def test_update_filters_can_add_new_key(populated_collection):
     """update_filters must allow adding a new filter key to an existing object."""
     _, collection = populated_collection
-    collection.update_filters(
-        [{"id": "vec_0005", "filter": {"new_label": "alpha"}}]
-    )
+    collection.update_filters([{"id": "vec_0005", "filter": {"new_label": "alpha"}}])
     results = collection.search(
         fields={DENSE_FIELD: {"query": dense_vec(), "limit": N_VECTORS}},
         filter=[{"new_label": {"$eq": "alpha"}}],
     )["results"][DENSE_FIELD]
     returned_ids = {r["id"] for r in results}
     assert "vec_0005" in returned_ids
-
-
-# -- multiple updates in a single call ----------------------------------------
 
 
 def test_update_filters_batch_updates(populated_collection):
@@ -143,33 +141,15 @@ def test_update_filters_batch_updates(populated_collection):
         assert oid in returned_ids, f"{oid} not found after batch update"
 
 
-def test_update_filters_batch_count_matches(populated_collection):
-    """Batch update count must equal the number of updates submitted."""
-    _, collection = populated_collection
-    updates = [
-        {"id": f"vec_{i:04d}", "filter": {"batch_tag": "yes"}} for i in range(3)
-    ]
-    result = collection.update_filters(updates)
-    assert result["updated"] == 3
-
-
-# -- numeric filter values ----------------------------------------------------
-
-
 def test_update_filters_numeric_value(populated_collection):
     """update_filters must handle numeric filter values."""
     _, collection = populated_collection
-    collection.update_filters(
-        [{"id": "vec_0008", "filter": {"priority": 99}}]
-    )
+    collection.update_filters([{"id": "vec_0008", "filter": {"priority": 99}}])
     results = collection.search(
         fields={DENSE_FIELD: {"query": dense_vec(), "limit": N_VECTORS}},
         filter=[{"priority": {"$eq": 99}}],
     )["results"][DENSE_FIELD]
     assert any(r["id"] == "vec_0008" for r in results)
-
-
-# -- idempotency --------------------------------------------------------------
 
 
 def test_update_filters_same_value_twice_is_idempotent(populated_collection):
@@ -224,33 +204,16 @@ def test_mv_update_filters_count_correct(populated_mv_collection):
 def test_mv_update_filters_reflected_in_get_objects(populated_mv_collection):
     """Updated filter value must be returned by get_objects()."""
     _, collection = populated_mv_collection
-    collection.update_filters(
-        updates=[{"id": "mv_0010", "filter": {"category": "X"}}]
-    )
+    collection.update_filters(updates=[{"id": "mv_0010", "filter": {"category": "X"}}])
     objs = collection.get_objects(["mv_0010"])
     flt = parse_filter_field(objs[0])
     assert flt["category"] == "X"
 
 
-def test_mv_update_filters_reflected_in_search(populated_mv_collection):
-    """Updated filter value must be returned by search with matching filter."""
-    _, collection = populated_mv_collection
-    collection.update_filters(
-        updates=[{"id": "mv_0020", "filter": {"category": "Y"}}]
-    )
-    results = collection.search(
-        fields={MV_FIELD: {"query": multi_vec(seed=20), "limit": N_VECTORS}},
-        filter=[{"category": {"$eq": "Y"}}],
-    )["results"][MV_FIELD]
-    assert any(r["id"] == "mv_0020" for r in results)
-
-
 def test_mv_update_filters_old_value_not_searchable(populated_mv_collection):
     """After updating a filter, the old value must no longer match."""
     _, collection = populated_mv_collection
-    collection.update_filters(
-        updates=[{"id": "mv_0000", "filter": {"category": "Z"}}]
-    )
+    collection.update_filters(updates=[{"id": "mv_0000", "filter": {"category": "Z"}}])
     results = collection.search(
         fields={MV_FIELD: {"query": multi_vec(seed=0), "limit": N_VECTORS}},
         filter=[{"category": {"$eq": "A"}}],
@@ -261,13 +224,22 @@ def test_mv_update_filters_old_value_not_searchable(populated_mv_collection):
 def test_mv_update_filters_idempotent(populated_mv_collection):
     """Applying the same update_filters twice must not raise an error."""
     _, collection = populated_mv_collection
-    collection.update_filters(
-        updates=[{"id": "mv_0004", "filter": {"category": "W"}}]
-    )
+    collection.update_filters(updates=[{"id": "mv_0004", "filter": {"category": "W"}}])
     result = collection.update_filters(
         updates=[{"id": "mv_0004", "filter": {"category": "W"}}]
     )
     assert isinstance(result, dict)
+
+
+def test_mv_update_filters_reflected_in_search(populated_mv_collection):
+    """Updated filter value must be returned by search with matching filter."""
+    _, collection = populated_mv_collection
+    collection.update_filters(updates=[{"id": "mv_0020", "filter": {"category": "Y"}}])
+    results = collection.search(
+        fields={MV_FIELD: {"query": multi_vec(seed=20), "limit": N_VECTORS}},
+        filter=[{"category": {"$eq": "Y"}}],
+    )["results"][MV_FIELD]
+    assert any(r["id"] == "mv_0020" for r in results)
 
 
 # -- non-existent ID ----------------------------------------------------------

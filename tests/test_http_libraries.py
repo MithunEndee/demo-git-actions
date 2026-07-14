@@ -1,20 +1,16 @@
 """
-Tests for all supported HTTP library backends:
-  - requests  - default HTTP library
-  - httpx1.1  - httpx with HTTP/1.1
-  - httpx2    - httpx with HTTP/2
+Tests for all supported HTTP backends: requests (default), httpx HTTP/1.1,
+and httpx HTTP/2.
 
-Verifies that core operations (create_collection, upsert, search, delete) work
-correctly through all three supported HTTP backends.
+Covers core operations (create, upsert, search, delete) across all three backends.
 """
 
 import os
 
 import pytest
-from helpers import DENSE_FIELD, DIM, dense_vec, make_dense_field, safe_delete, uid
+from helpers import DENSE_FIELD, dense_vec, make_dense_field, safe_delete, uid
 
 from endee import Endee
-
 
 # -- client construction -------------------------------------------------------
 
@@ -82,7 +78,10 @@ def test_httpx11_create_search_delete_collection():
         c.create_collection(name=name, fields=[make_dense_field()])
         col = c.get_collection(name)
         col.upsert(
-            [{"id": f"v{i}", "fields": {DENSE_FIELD: dense_vec(seed=i)}} for i in range(5)]
+            [
+                {"id": f"v{i}", "fields": {DENSE_FIELD: dense_vec(seed=i)}}
+                for i in range(5)
+            ]
         )
         results = col.search(
             fields={DENSE_FIELD: {"query": dense_vec(seed=0), "limit": 3}},
@@ -102,7 +101,10 @@ def test_httpx11_upsert_returns_count():
         c.create_collection(name=name, fields=[make_dense_field()])
         col = c.get_collection(name)
         result = col.upsert(
-            [{"id": f"v{i}", "fields": {DENSE_FIELD: dense_vec(seed=i)}} for i in range(10)]
+            [
+                {"id": f"v{i}", "fields": {DENSE_FIELD: dense_vec(seed=i)}}
+                for i in range(10)
+            ]
         )
         assert result["upserted"] == 10
     finally:
@@ -126,7 +128,13 @@ def test_httpx11_get_objects_round_trip():
         c.create_collection(name=name, fields=[make_dense_field()])
         col = c.get_collection(name)
         col.upsert(
-            [{"id": "go1", "meta": {"k": "v"}, "fields": {DENSE_FIELD: dense_vec(seed=1)}}]
+            [
+                {
+                    "id": "go1",
+                    "meta": {"k": "v"},
+                    "fields": {DENSE_FIELD: dense_vec(seed=1)},
+                }
+            ]
         )
         objs = col.get_objects(["go1"])
         assert len(objs) == 1
@@ -162,7 +170,10 @@ def test_httpx2_create_search_delete_collection():
         c.create_collection(name=name, fields=[make_dense_field()])
         col = c.get_collection(name)
         col.upsert(
-            [{"id": f"v{i}", "fields": {DENSE_FIELD: dense_vec(seed=i)}} for i in range(5)]
+            [
+                {"id": f"v{i}", "fields": {DENSE_FIELD: dense_vec(seed=i)}}
+                for i in range(5)
+            ]
         )
         results = col.search(
             fields={DENSE_FIELD: {"query": dense_vec(seed=0), "limit": 3}},
@@ -182,7 +193,10 @@ def test_httpx2_upsert_returns_count():
         c.create_collection(name=name, fields=[make_dense_field()])
         col = c.get_collection(name)
         result = col.upsert(
-            [{"id": f"v{i}", "fields": {DENSE_FIELD: dense_vec(seed=i)}} for i in range(10)]
+            [
+                {"id": f"v{i}", "fields": {DENSE_FIELD: dense_vec(seed=i)}}
+                for i in range(10)
+            ]
         )
         assert result["upserted"] == 10
     finally:
@@ -206,7 +220,13 @@ def test_httpx2_get_objects_round_trip():
         c.create_collection(name=name, fields=[make_dense_field()])
         col = c.get_collection(name)
         col.upsert(
-            [{"id": "go2", "meta": {"k": "v2"}, "fields": {DENSE_FIELD: dense_vec(seed=2)}}]
+            [
+                {
+                    "id": "go2",
+                    "meta": {"k": "v2"},
+                    "fields": {DENSE_FIELD: dense_vec(seed=2)},
+                }
+            ]
         )
         objs = col.get_objects(["go2"])
         assert len(objs) == 1

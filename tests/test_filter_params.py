@@ -1,15 +1,12 @@
 """
-Tests for search() filter tuning parameters:
-  - prefilter_cardinality_threshold (int, range 1000-1000000)
-  - filter_boost_percentage (float, range 0-100)
+Tests for search() filter tuning parameters: prefilter_cardinality_threshold
+and filter_boost_percentage.
 
-These parameters allow tuning how the server handles filtered ANN search.
-Uses the populated_collection fixture (50 items, DENSE_FIELD, various filter fields).
+Covers accepted value ranges and client-side validation for both parameters.
 """
 
 import pytest
 from helpers import DENSE_FIELD, N_VECTORS, dense_vec, parse_filter_field
-
 
 # -- prefilter_cardinality_threshold ------------------------------------------
 
@@ -161,7 +158,7 @@ def test_filter_boost_above_max_raises(populated_collection):
 
 
 def test_both_params_together(populated_collection):
-    """Both prefilter_cardinality_threshold and filter_boost_percentage set together must succeed."""
+    """Both filter params set together must succeed."""
     _, collection = populated_collection
     results = collection.search(
         fields={DENSE_FIELD: {"query": dense_vec(), "limit": N_VECTORS}},
@@ -173,7 +170,7 @@ def test_both_params_together(populated_collection):
 
 
 def test_filter_params_without_filter(populated_collection):
-    """prefilter_cardinality_threshold and filter_boost_percentage set with no filter must still work."""
+    """Both filter params with no filter clause must still work."""
     _, collection = populated_collection
     results = collection.search(
         fields={DENSE_FIELD: {"query": dense_vec(), "limit": N_VECTORS}},

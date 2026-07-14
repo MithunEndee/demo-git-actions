@@ -1,12 +1,10 @@
 """
-Tests for self-service token management:
-  - create_my_token()  - create a new token for the current database
-  - list_my_tokens()   - list tokens for the current database
-  - delete_my_token()  - delete a named token
+Tests for self-service token management: create_my_token, list_my_tokens,
+and delete_my_token.
 
-These use the ENDEE_TOKEN database-level token (not root). Admin token
-management (create_token / list_tokens / delete_token) requires root
-access and is not tested here.
+Covers token creation, listing, deletion, lifecycle, duplicate name handling,
+and client-side validation. Uses a database-level token (ENDEE_TOKEN); admin
+token management requiring root access is covered in test_admin.py.
 """
 
 import os
@@ -16,7 +14,6 @@ from helpers import uid
 
 from endee import Endee
 from endee.exceptions import ConflictException, EndeeException
-
 
 # -- helpers -------------------------------------------------------------------
 
@@ -85,9 +82,7 @@ def test_create_my_token_appears_in_list(client):
     try:
         client.create_my_token(name=tok_name)
         tokens = client.list_my_tokens()
-        token_names = [
-            t.get("name") for t in tokens if isinstance(t, dict)
-        ]
+        token_names = [t.get("name") for t in tokens if isinstance(t, dict)]
         assert tok_name in token_names, (
             f"Token '{tok_name}' not found in list_my_tokens(): {token_names}"
         )

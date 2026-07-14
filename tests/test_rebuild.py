@@ -1,9 +1,9 @@
 """
 Tests for Collection.rebuild() and Collection.rebuild_status().
 
-rebuild() is ASYNC on the server: it returns 202 immediately with
-status="in_progress". Tests that need to assert on completed state
-use wait_for_rebuild(), which polls rebuild_status() until done.
+Covers response shape, new/previous config, custom M/ef_con, all field types,
+status polling, objects_processed, percent_complete, and timestamps.
+rebuild() is async - tests needing completed state poll via wait_for_rebuild().
 """
 
 import time
@@ -18,7 +18,6 @@ from helpers import (
     safe_delete,
     uid,
 )
-
 
 # -- polling helper ------------------------------------------------------------
 
@@ -81,6 +80,21 @@ def test_rebuild_response_has_previous_config(populated_collection):
     _, collection = populated_collection
     result = collection.rebuild([{"field": DENSE_FIELD, "M": 8, "ef_con": 64}])
     assert "previous_config" in result, f"Missing 'previous_config' in: {result}"
+    wait_for_rebuild(collection)
+
+
+# -- rebuild - custom HNSW parameters -----------------------------------------
+
+
+def test_rebuild_with_same_config(populated_collection):
+    """rebuild() with the existing HNSW config (no param change) must succeed."""
+    _, collection = populated_collection
+    current = collection.rebuild_status().get("current_config", {})
+    m = current.get("M", 16)
+    ef_con = current.get("ef_con", 100)
+    result = collection.rebuild([{"field": DENSE_FIELD, "M": m, "ef_con": ef_con}])
+    assert isinstance(result, dict)
+    assert result.get("status") == "in_progress"
     wait_for_rebuild(collection)
 
 
@@ -276,7 +290,12 @@ def test_rebuild_multi_vector_field(client):
     try:
         client.create_collection(name=name, fields=[make_mv_field()])
         collection = client.get_collection(name)
-        collection.upsert([{"id": f"mv_{i}", "fields": {MV_FIELD: multi_vec(seed=i)}} for i in range(10)])
+        collection.upsert(
+            [
+                {"id": f"mv_{i}", "fields": {MV_FIELD: multi_vec(seed=i)}}
+                for i in range(10)
+            ]
+        )
         result = collection.rebuild([{"field": MV_FIELD, "M": 8, "ef_con": 64}])
         assert isinstance(result, dict)
         assert result.get("status") == "in_progress"
@@ -291,7 +310,12 @@ def test_rebuild_multi_vector_completes_successfully(client):
     try:
         client.create_collection(name=name, fields=[make_mv_field()])
         collection = client.get_collection(name)
-        collection.upsert([{"id": f"mv_{i}", "fields": {MV_FIELD: multi_vec(seed=i)}} for i in range(20)])
+        collection.upsert(
+            [
+                {"id": f"mv_{i}", "fields": {MV_FIELD: multi_vec(seed=i)}}
+                for i in range(20)
+            ]
+        )
         collection.rebuild([{"field": MV_FIELD, "M": 8, "ef_con": 64}])
         status = wait_for_rebuild(collection)
         assert status["status"] in ("completed", "idle")
@@ -305,7 +329,12 @@ def test_rebuild_multi_vector_searchable_after_completion(client):
     try:
         client.create_collection(name=name, fields=[make_mv_field()])
         collection = client.get_collection(name)
-        collection.upsert([{"id": f"mv_{i}", "fields": {MV_FIELD: multi_vec(seed=i)}} for i in range(20)])
+        collection.upsert(
+            [
+                {"id": f"mv_{i}", "fields": {MV_FIELD: multi_vec(seed=i)}}
+                for i in range(20)
+            ]
+        )
         collection.rebuild([{"field": MV_FIELD, "M": 8, "ef_con": 64}])
         wait_for_rebuild(collection, timeout=300)
         results = collection.search(

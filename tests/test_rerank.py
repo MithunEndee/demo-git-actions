@@ -1,14 +1,21 @@
 """
 Tests for the standalone rerank() function.
 
-Covers: return shape, limit enforcement, similarity ordering, field_weights,
-rrf_k, error cases (invalid name, bad weights, empty results), and
-deduplication across fields.
+Covers return shape, limit enforcement, similarity ordering, field_weights,
+rrf_k, deduplication across fields, and error cases.
 """
 
 import pytest
+from helpers import (
+    DENSE_FIELD,
+    HYBRID_DIM,
+    N_VECTORS,
+    SPARSE_FIELD,
+    dense_vec,
+    sparse_vec,
+)
+
 from endee import rerank
-from helpers import DENSE_FIELD, HYBRID_DIM, N_VECTORS, SPARSE_FIELD, dense_vec, sparse_vec
 
 
 def _raw_search(collection, seed=0):
@@ -16,7 +23,10 @@ def _raw_search(collection, seed=0):
     si, sv = sparse_vec(seed=seed)
     return collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=seed), "limit": N_VECTORS},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=seed),
+                "limit": N_VECTORS,
+            },
             SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS},
         }
     )
@@ -78,6 +88,18 @@ def test_rerank_results_sorted_by_similarity(populated_hybrid_collection):
     results = rerank(raw, limit=10)["results"]
     sims = [r["similarity"] for r in results]
     assert sims == sorted(sims, reverse=True), "Results not sorted by similarity desc"
+
+
+# -- deduplication ------------------------------------------------------------
+
+
+def test_rerank_deduplicates_across_fields(populated_hybrid_collection):
+    """rerank() output must contain each id at most once even if it appears in both fields."""
+    _, collection = populated_hybrid_collection
+    raw = _raw_search(collection, seed=13)
+    results = rerank(raw, limit=N_VECTORS)["results"]
+    ids = [r["id"] for r in results]
+    assert len(ids) == len(set(ids)), "Duplicate ids found in rerank() output"
 
 
 # -- field_weights parameter --------------------------------------------------
@@ -167,15 +189,3 @@ def test_rerank_empty_fields_raises():
     empty_raw = {"results": {}}
     with pytest.raises(ValueError):
         rerank(empty_raw, limit=10)
-
-
-# -- deduplication ------------------------------------------------------------
-
-
-def test_rerank_deduplicates_across_fields(populated_hybrid_collection):
-    """rerank() output must contain each id at most once even if it appears in both fields."""
-    _, collection = populated_hybrid_collection
-    raw = _raw_search(collection, seed=13)
-    results = rerank(raw, limit=N_VECTORS)["results"]
-    ids = [r["id"] for r in results]
-    assert len(ids) == len(set(ids)), "Duplicate ids found in rerank() output"

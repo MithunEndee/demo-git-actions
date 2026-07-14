@@ -1,12 +1,8 @@
 """
-Tests for client-side validation and server-side HTTP error mapping.
+Tests for client-side validation and server-side error mapping.
 
-Client-side: field config validation, name rules, upsert/search parameter
-bounds, filter key/value size limits, and collection schema constraints.
-
-Server-side: HTTP status -> exception class mapping (AuthenticationException,
-ConflictException, NotFoundException, etc.) tested via raise_exception() unit
-tests and real API calls with bad credentials or duplicate resources.
+Covers field config rules, name constraints, upsert and search parameter bounds,
+filter limits, and HTTP status to exception class mapping (401, 404, 409).
 """
 
 import os
@@ -280,7 +276,9 @@ def test_search_with_empty_vector_raises(populated_collection):
     """Searching with an empty vector [] must raise an error."""
     _, collection = populated_collection
     with pytest.raises((ValueError, EndeeException)):
-        collection.search(fields={DENSE_FIELD: {"query": [], "limit": 5}})["results"][DENSE_FIELD]
+        collection.search(fields={DENSE_FIELD: {"query": [], "limit": 5}})["results"][
+            DENSE_FIELD
+        ]
 
 
 # -- Upsert errors ------------------------------------------------------------
@@ -350,7 +348,9 @@ def test_search_wrong_dimension_raises(populated_collection):
     """Searching with a vector of the wrong dimension must raise an error."""
     _, collection = populated_collection
     with pytest.raises((ValueError, EndeeException)):
-        collection.search(fields={DENSE_FIELD: {"query": dense_vec(dim=DIM + 2), "limit": 5}})["results"][DENSE_FIELD]
+        collection.search(
+            fields={DENSE_FIELD: {"query": dense_vec(dim=DIM + 2), "limit": 5}}
+        )["results"][DENSE_FIELD]
 
 
 # -- set_token behavior -------------------------------------------------------
@@ -470,14 +470,18 @@ def test_search_ef_search_zero_raises(populated_collection):
     """search with ef_search=0 must raise ValueError (client-side validation)."""
     _, collection = populated_collection
     with pytest.raises(ValueError):
-        collection.search(fields={DENSE_FIELD: {"query": dense_vec(), "limit": 5}}, ef_search=0)
+        collection.search(
+            fields={DENSE_FIELD: {"query": dense_vec(), "limit": 5}}, ef_search=0
+        )
 
 
 def test_search_ef_search_over_max_raises(populated_collection):
     """search with ef_search above the maximum must raise ValueError (client-side)."""
     _, collection = populated_collection
     with pytest.raises(ValueError):
-        collection.search(fields={DENSE_FIELD: {"query": dense_vec(), "limit": 5}}, ef_search=1025)
+        collection.search(
+            fields={DENSE_FIELD: {"query": dense_vec(), "limit": 5}}, ef_search=1025
+        )
 
 
 # -- Reranker validation (client-side) ----------------------------------------

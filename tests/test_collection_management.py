@@ -1,9 +1,9 @@
 """
-Tests for collection management - create_collection, list_collections,
+Tests for collection lifecycle: create_collection, list_collections,
 get_collection, describe, and delete_collection.
 
-Covers field configs (vector, sparse, multi_vector), HNSW parameters,
-all precision and space_type combinations, and lifecycle operations.
+Covers all field types (vector, sparse, multi_vector), HNSW parameters,
+all precision and space_type combinations, and pydantic model / to_dict flows.
 """
 
 import pytest
@@ -144,8 +144,13 @@ def test_create_collection_custom_hnsw_params(client, m, ef_construct):
         )
         assert field is not None, f"Field '{DENSE_FIELD}' not found in describe()"
         params = field.get("params") or {}
-        assert params.get("M") == m or params.get("m") == m, f"Expected m={m}, got params={params}"
-        assert params.get("ef_construct") == ef_construct or params.get("ef_con") == ef_construct, f"Expected ef_construct={ef_construct}, got params={params}"
+        assert params.get("M") == m or params.get("m") == m, (
+            f"Expected m={m}, got params={params}"
+        )
+        assert (
+            params.get("ef_construct") == ef_construct
+            or params.get("ef_con") == ef_construct
+        ), f"Expected ef_construct={ef_construct}, got params={params}"
     finally:
         safe_delete(client, name)
 

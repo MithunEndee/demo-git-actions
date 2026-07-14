@@ -1,11 +1,10 @@
 """
 Tests for Collection.get_objects() - fetch full objects by ID.
 
-Covers: return shape, meta/filter round-trips, vector presence, non-existent
-IDs, mixed requests, and client-side validation.
+Covers return shape, meta/filter/vector round-trips, non-existent IDs,
+mixed ID requests, and sparse and multi_vector collections.
 """
 
-import pytest
 from helpers import (
     DENSE_FIELD,
     DIM,
@@ -13,15 +12,7 @@ from helpers import (
     N_VECTORS,
     SPARSE_FIELD,
     dense_vec,
-    make_dense_field,
-    make_mv_field,
-    make_sparse_field,
-    multi_vec,
-    safe_delete,
-    sparse_vec,
-    uid,
 )
-
 
 # -- return structure ---------------------------------------------------------
 

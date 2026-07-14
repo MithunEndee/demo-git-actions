@@ -1,8 +1,7 @@
 """
-Tests for Endee server-info endpoints:
-  - health()  - server liveness check
-  - stats()   - runtime statistics
+Tests for server info endpoints: health() and stats().
 
+Covers required response keys, value types, and repeated calls.
 No collection fixtures required.
 """
 

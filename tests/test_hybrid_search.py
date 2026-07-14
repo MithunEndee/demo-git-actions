@@ -1,9 +1,8 @@
 """
 Tests for hybrid (dense + sparse) collection operations.
 
-Covers upsert, dense-only search, sparse-only search, full RRF search,
-per-field limits, ef_search, meta round-trips, delete_object, and
-various dense field precision and space_type configurations.
+Covers upsert, dense-only search, sparse-only search, RRF hybrid search,
+per-field limits, ef_search, meta round-trips, delete_object, and field configs.
 """
 
 import pytest
@@ -147,8 +146,14 @@ def test_hybrid_full_rrf_search_returns_results(populated_hybrid_collection):
     si, sv = sparse_vec(seed=42)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=42), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=42),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         }
     )
     results = rerank(raw, limit=10)["results"]
@@ -161,8 +166,14 @@ def test_hybrid_full_rrf_result_structure(populated_hybrid_collection):
     si, sv = sparse_vec(seed=11)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=11), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=11),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         }
     )
     results = rerank(raw, limit=1)["results"]
@@ -177,8 +188,14 @@ def test_hybrid_full_rrf_results_sorted(populated_hybrid_collection):
     si, sv = sparse_vec(seed=13)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=13), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=13),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         }
     )
     results = rerank(raw, limit=10)["results"]
@@ -192,8 +209,14 @@ def test_hybrid_rrf_limit_respected(populated_hybrid_collection):
     si, sv = sparse_vec(seed=5)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=5), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=5),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         }
     )
     results = rerank(raw, limit=5)["results"]
@@ -221,7 +244,7 @@ def test_hybrid_per_field_limit_rrf(populated_hybrid_collection):
 # -- ef_search parameter ------------------------------------------------------
 
 
-@pytest.mark.parametrize("ef_search", [32, 64, 128, 256])
+@pytest.mark.parametrize("ef_search", [32, 64, 128, 256, 512])
 def test_hybrid_ef_search_accepted(populated_hybrid_collection, ef_search):
     """search must accept ef_search values across the valid range."""
     _, collection = populated_hybrid_collection
@@ -272,8 +295,14 @@ def test_hybrid_delete_object_removes_from_search(populated_hybrid_collection):
     si, sv = sparse_vec(seed=10)
     raw = collection.search(
         fields={
-            DENSE_FIELD: {"query": dense_vec(HYBRID_DIM, seed=10), "limit": N_VECTORS * 5},
-            SPARSE_FIELD: {"query": {"indices": si, "values": sv}, "limit": N_VECTORS * 5},
+            DENSE_FIELD: {
+                "query": dense_vec(HYBRID_DIM, seed=10),
+                "limit": N_VECTORS * 5,
+            },
+            SPARSE_FIELD: {
+                "query": {"indices": si, "values": sv},
+                "limit": N_VECTORS * 5,
+            },
         }
     )
     results = rerank(raw, limit=N_VECTORS)["results"]
@@ -290,7 +319,7 @@ def test_hybrid_delete_object_removes_from_search(populated_hybrid_collection):
         ("int8", "cosine"),
         ("float32", "cosine"),
         ("float16", "l2"),
-        ("int8", "ip"),
+        ("int16", "ip"),
     ],
 )
 def test_hybrid_create_various_field_configs(client, precision, space_type):
