@@ -25,8 +25,9 @@ from endee import rerank
 _XFAIL_ANN = pytest.mark.xfail(
     strict=False,
     reason=(
-        "HNSW post-filter: filter checked per-node during traversal; "
-        "bounded ef window may miss matching nodes on a small corpus"
+        "HNSW post-filter: matching nodes outside the ef_search traversal window are "
+        "never visited; on a small corpus this reliably underreturns filtered results."
+
     ),
 )
 
