@@ -27,7 +27,6 @@ _XFAIL_ANN = pytest.mark.xfail(
     reason=(
         "HNSW post-filter: matching nodes outside the ef_search traversal window are "
         "never visited; on a small corpus this reliably underreturns filtered results."
-
     ),
 )
 
