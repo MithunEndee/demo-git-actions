@@ -1,16 +1,13 @@
-# Endee-CrewAI Test Suite
+# Endee-LangChain Test Suite
 
-There are two kinds of tests, selected via pytest markers. Unit tests mock
-the `endee` client, so they need nothing beyond the package itself.
-Integration tests run against a live or local Endee server and cover the
-`EndeeVectorStore` wrapper end to end.
+There are two kinds of tests, selected via pytest markers. Unit tests mock the `endee` client, so they need nothing beyond the package itself. Integration tests run against a live or local Endee server and cover the `EndeeVectorStore` wrapper end to end.
 
 ---
 
 ## Prerequisites
 
-- Python 3.10 or higher (`<3.14`, per `setup.py`)
-- For **unit** tests: nothing else. `pip install -e .` plus test deps is enough.
+- Python 3.9 or higher
+- For **unit** tests: nothing else. `pip install -e .` plus the test deps is enough.
 - For **integration** tests: a running Endee server (cloud or local) and a
   valid `ENDEE_API_TOKEN`.
 
@@ -41,7 +38,7 @@ setup automatically.
 
 # Single file or keyword filter
 ./tests/run_tests.sh --unit -- tests/test_unit.py
-./tests/run_tests.sh --unit -- -k test_save
+./tests/run_tests.sh --unit -- -k test_similarity_search
 ```
 
 ### Manual setup (all platforms)
@@ -53,7 +50,7 @@ python3 -m venv .venv && source .venv/bin/activate   # macOS / Linux
 
 # 2. Install the package and test dependencies
 pip install -e .
-pip install pytest pytest-mock pytest-timeout numpy
+pip install pytest pytest-mock pytest-timeout pytest-asyncio numpy
 
 # 3. Unit tests: no further setup needed
 pytest -m unit
@@ -77,23 +74,26 @@ pytest -m integration
 
 ## Test files
 
-Tests are split into two files by kind, not by concern: `test_unit.py` (mocked, no server) and `test_integration.py` (live server). The `unit`/`integration` pytest markers select between them. Within each file, concerns live in their own class.
+Tests are split into two files by kind, selected via the `unit`/`integration` pytest markers. Each file holds several concern-classes, one per area of `EndeeVectorStore`.
 
 ### `test_unit.py`
 
 | Class | What is tested |
 |-------|-----------------|
-| `TestVectorStoreUnit` | Core CRUD on `EndeeVectorStore`. Covers init/create-or-reuse (incl. `force_recreate`), `save` (incl. the text-truncation boundary), `search` (single-field and multi-field RRF fusion), `get_objects`/`get_vector`/`delete_vector`, `update_filters`, `reset`, `describe`, `close` (session/client fallback), sparse auto-detection wiring, and network-failure propagation. |
-| `TestFiltersUnit` | Filter-list normalization (single dict to list) and filter-data construction from primitive-typed metadata. |
-| `TestSparseUnit` | `SparseVector`, `SparseModelAdapter`, `wrap_sparse_model`, `EndeeModelSparse`, and hybrid search RRF wiring. |
+| `TestVectorStoreUnit` | Constructor validation, `_validate_collection_config` mismatch/warn paths, `add_texts`/`from_texts`/`from_documents`/`from_existing_collection`, batch-size boundary, embedding-provider truncation matrix (openai/cohere/huggingface/default), cosine-ranked similarity search, `delete`, `update_filters`, `add_objects`/multi-field RRF wiring, network-failure propagation. |
+| `TestFiltersUnit` | Filter forwarding/translation, `$eq`/`$in`/multi-filter, unsupported-operator error. |
+| `TestSparseUnit` | `SparseVector`, `SparseModelAdapter`, `wrap_sparse_model`, `EndeeModelSparse`, hybrid auto-detection, async `aembed_documents`/`aembed_query`. |
 
 ### `test_integration.py`
 
 | Class | What is tested |
 |-------|-----------------|
-| `TestVectorStoreIntegration` | The full dense lifecycle, including filtered search/delete, client construction (api_token/base_url), and collection lifecycle (force_recreate, reconnect), against a live server, split into independent tests. |
-| `TestSparseIntegration` | Hybrid dense+sparse collections, including a user-supplied sparse embedding, against a live server. |
-| `TestMultiVectorIntegration` | Multi-vector field coverage (`add_objects` + `multi_field_search`) against a live server. |
+| `TestVectorStoreIntegration` | Live CRUD, config validation (incl. mismatch detection on reconnect), filter assertions, client construction, collection lifecycle, and factory-method coverage against a real server. |
+| `TestMultiFieldIntegration` | Live collection with separate title, content, and keywords fields. |
+| `TestSparseIntegration` | Live hybrid/BM25 auto-detect against a real server. |
+| `TestMultiVectorIntegration` | Live collection with a dense field and a `multi_vector` field, exercised via `multi_field_search`. |
+
+All tests in `test_unit.py` mock the `endee` client (no network); all tests in `test_integration.py` require a live/local Endee server.
 
 ---
 
@@ -101,19 +101,19 @@ Tests are split into two files by kind, not by concern: `test_unit.py` (mocked, 
 
 | File | Purpose |
 |------|---------|
-| `conftest.py` | `MockEndee`/`MockEndeeCollection`: a mock backend (unit tests). `mock_endee_client`, `fake_embedder`, `make_store` fixtures. `live_client`, a real `Endee` client that skips if no token. `uid()`/`safe_delete()`: unique collection naming and silent-delete helpers for integration fixtures. `_cleanup_stale_collections`: an autouse session fixture that sweeps leftover test collections from a previous interrupted run. |
+| `conftest.py` | `MockEndee`/`MockEndeeCollection`: a mock backend (unit tests). `mock_endee_client`, `fake_embedder`, `fake_sparse_embedding` fixtures. `live_client`: a real `Endee` client that skips if no token is set. `uid()`/`safe_delete()`: helpers for integration fixtures that generate unique collection names (truncated to fit the server's 48-char limit) and delete collections silently. `_cleanup_stale_collections`: an autouse session fixture that sweeps leftover test collections from a previous interrupted run, plus a final sweep at session end. |
 | `run_tests.sh` | A shell wrapper that creates a virtualenv, installs dependencies, sets environment variables, and invokes pytest. Run with `--help` for full usage and examples. |
 
 ---
 
 ## Design notes
 
-**One file per kind of test:** `test_unit.py` for unit tests, `test_integration.py` for integration tests, each grouped into classes by concern.
+**One file per kind of test:** `test_unit.py` for unit tests, `test_integration.py` for integration tests, grouped into classes by concern. Filters get their own class only at the unit level; at the integration level that coverage folds into `TestVectorStoreIntegration`.
 
 **Plain pytest style:** plain `assert` and fixtures only, no `unittest.TestCase`. `@pytest.mark.parametrize` covers input matrices.
 
-**Independent tests:** no test depends on another running first; each sets up its own state.
+**Independent tests:** no test depends on another running first.
 
-**Unique collection names:** every integration test uses a unique name via `uid()`, prefixed `crewai_test_` plus a random hex suffix, never fixed, so runs never collide.
+**Unique collection names:** every integration test uses a unique name via `uid()`, prefixed `langchain_test_` plus a random hex suffix, never fixed, so runs never collide.
 
-**Cleanup:** fixtures delete their own collection after each test. `_cleanup_stale_collections` clears leftovers from interrupted runs.
+**Cleanup:** fixtures delete their own collection via teardown. `_cleanup_stale_collections` sweeps leftovers at session start and end.

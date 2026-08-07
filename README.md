@@ -1,429 +1,424 @@
-# crewai-endee
+# Endee LangChain Integration
 
-**Endee vector database integration for CrewAI agent memory**
+LangChain vector store integration for [Endee](https://github.com/endee-io/endee).
 
-`crewai-endee` connects [Endee](https://github.com/endee-io/endee) to [CrewAI](https://crewai.com), giving your agents persistent memory with dense, hybrid, and multi-field retrieval.
+For Endee setup, features, and server docs see [docs.endee.io](https://docs.endee.io/quick-start).
 
-Uses the same `fields=` configuration as the [Endee Python client](https://github.com/endee-io/endee)'s `create_collection()`.
+**Sections:** [Setup](#1-setup) | [Dense](#2-dense-search) | [Hybrid](#3-hybrid-search) | [Multi-Field](#4-multi-field--multi-vector) | [Filters](#5-filters) | [RAG Chain](#6-rag-chain)
 
 ---
 
-## Installation
+## 1. Setup
 
-Requires **Python 3.10–3.13**.
+### Install
 
 ```bash
-pip install crewai-endee
+pip install langchain-endee endee endee-model
 ```
 
-This installs `endee`, `endee_model`, and `crewai` automatically.
+Pick an embedding model:
 
----
+```bash
+# Option A: Local (no API key)
+pip install langchain-huggingface sentence-transformers
 
-## Quick Start
-
-```python
-from crewai_endee import EndeeVectorStore
-
-store = EndeeVectorStore(
-    type="my_collection",
-    embedder_config={
-        "provider": "sentence-transformer",
-        "config": {"model_name": "all-MiniLM-L6-v2"},
-    },
-    fields=[
-        {"name": "dense", "type": "vector",
-         "params": {"dimension": 384, "space_type": "cosine", "precision": "int8"}},
-    ],
-)
-
-store.save("Go is a statically typed language by Google.", {"lang": "Go"})
-results = store.search("static typing", limit=3)
+# Option B: OpenAI
+pip install langchain-openai
 ```
 
----
+For hybrid search with SPLADE (optional):
 
-## Connect to Endee
-
-### With API token
-
-Sign up at [endee.io](https://endee.io) and get your token. See the [Endee docs](https://docs.endee.io/quick-start) for details.
-
-```python
-store = EndeeVectorStore(
-    type="my_collection",
-    embedder_config=embedder_config,
-    api_token="YOUR_ENDEE_API_TOKEN",
-    fields=[
-        {"name": "dense", "type": "vector",
-         "params": {"dimension": 384, "space_type": "cosine", "precision": "int8"}},
-    ],
-)
+```bash
+pip install fastembed
 ```
 
-### Without API token (local)
+### Create a Collection
 
-Run the open-source Endee server locally. See [github.com/endee-io/endee](https://github.com/endee-io/endee) for setup. Omit `api_token`:
-
-```python
-store = EndeeVectorStore(
-    type="my_collection",
-    embedder_config=embedder_config,
-    fields=[
-        {"name": "dense", "type": "vector",
-         "params": {"dimension": 384, "space_type": "cosine", "precision": "int8"}},
-    ],
-)
-```
-
----
-
-## Dense Mode
+Collections are created with `fields=` — the same pattern as the Python client. Each field has a name, type, and params.
 
 ```python
-from crewai_endee import EndeeVectorStore
+from langchain_endee import EndeeVectorStore, RetrievalMode
+from langchain_core.documents import Document
 
-store = EndeeVectorStore(
-    type="demo_dense",
-    embedder_config=embedder_config,
+from langchain_huggingface import HuggingFaceEmbeddings
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+DIMENSION = 384
+
+# Or OpenAI:
+# from langchain_openai import OpenAIEmbeddings
+# embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+# DIMENSION = 1536
+
+# Dense-only collection (single vector field)
+vector_store = EndeeVectorStore(
+    embedding=embeddings,
+    api_token="your-token",       # from app.endee.io (None for local)
+    collection_name="my_collection",
     fields=[
-        {"name": "dense", "type": "vector",
-         "params": {"dimension": 384, "space_type": "cosine", "precision": "int8"}},
+        {
+            "name": "dense",
+            "type": "vector",
+            "params": {
+                "dimension": DIMENSION,
+                "space_type": "cosine",
+                "precision": "int8",
+            },
+        },
     ],
     force_recreate=True,
 )
-
-store.save("Python is a dynamic language.", {"lang": "Python"})
-results = store.search("dynamic typing", limit=3)
 ```
 
----
+### Endee Local (Docker)
 
-## Hybrid Mode (endee_bm25 — auto-encoded)
+Run Endee locally — no token needed. See [GitHub](https://github.com/endee-io/endee) for setup.
 
-Add a sparse field with `"sparse_model": "endee_bm25"`. The BM25 sparse encoder is created automatically — no extra setup needed:
+```bash
+docker run -p 8000:8080 -v endee-data:/data endee-oss:latest
+```
 
 ```python
-store = EndeeVectorStore(
-    type="demo_hybrid",
-    embedder_config=embedder_config,
+vector_store = EndeeVectorStore(
+    embedding=embeddings,
+    collection_name="local_collection",
     fields=[
         {"name": "dense", "type": "vector",
-         "params": {"dimension": 384, "space_type": "cosine", "precision": "int8"}},
-        {"name": "sparse", "type": "sparse",
-         "sparse_model": "endee_bm25"},
+         "params": {"dimension": DIMENSION, "space_type": "cosine", "precision": "int8"}},
     ],
+    base_url="http://localhost:8000/api/v2",
+)
+```
+
+### Ingest Documents
+
+```python
+documents = [
+    Document(
+        page_content="Python is a high-level programming language known for readability.",
+        metadata={"topic": "programming", "language": "python"},
+    ),
+    Document(
+        page_content="Machine learning gives systems the ability to learn from data.",
+        metadata={"topic": "ai", "field": "ml"},
+    ),
+    Document(
+        page_content="Vector databases store embeddings for fast similarity search.",
+        metadata={"topic": "database", "type": "vector"},
+    ),
+]
+```
+
+#### `add_texts()` — insert into an existing store
+
+```python
+ids = vector_store.add_texts(
+    texts=[doc.page_content for doc in documents],
+    metadatas=[doc.metadata for doc in documents],
+)
+```
+
+#### `from_texts()` / `from_documents()` — create + insert in one call
+
+```python
+store = EndeeVectorStore.from_texts(
+    texts=["Python is great.", "Rust is fast."],
+    metadatas=[{"lang": "python"}, {"lang": "rust"}],
+    embedding=embeddings,
+    api_token="your-token",
+    collection_name="my_collection",
+    dimension=DIMENSION,
     force_recreate=True,
 )
+```
 
-store.save("Go has native concurrency.", {"lang": "Go"})
+### Reconnect to an Existing Collection
 
-# Hybrid search — dense similarity + BM25 keyword matching, fused via RRF
-results = store.search("concurrency", limit=3)
-
-# Tune fusion weights
-results = store.search(
-    "concurrency", limit=3,
-    field_weights={"dense": 0.3, "sparse": 0.7},
-    rrf_k=30,
+```python
+vector_store = EndeeVectorStore.from_existing_collection(
+    collection_name="my_collection",
+    embedding=embeddings,
+    api_token="your-token",
 )
 ```
 
 ---
 
-## Hybrid Mode (default sparse — user-provided vectors)
-
-Use `"sparse_model": "default"` and provide your own sparse vectors via `add_objects()` and `multi_field_search()`:
+## 2. Dense Search
 
 ```python
-import uuid
-from endee import rerank
+# similarity_search
+results = vector_store.similarity_search(query="How does RAG work?", k=3)
 
-store = EndeeVectorStore(
-    type="demo_hybrid_default",
-    embedder_config=embedder_config,
+# similarity_search_with_score
+scored = vector_store.similarity_search_with_score(query="neural networks", k=3)
+
+# similarity_search_by_object
+query_vec = embeddings.embed_query("programming language safety")
+results = vector_store.similarity_search_by_object(embedding=query_vec, k=2)
+
+# Search tuning
+results = vector_store.similarity_search(
+    query="vector search", k=10, ef=256,
+    filter=[{"topic": {"$eq": "database"}}],
+    prefilter_cardinality_threshold=5_000,
+    filter_boost_percentage=20,
+)
+
+# as_retriever
+retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+docs = retriever.invoke("What are vector databases used for?")
+```
+
+---
+
+## 3. Hybrid Search
+
+Create a collection with both `vector` and `sparse` fields:
+
+```python
+from langchain_endee import EndeeModelSparse
+
+sparse = EndeeModelSparse()  # Native BM25
+
+hybrid_store = EndeeVectorStore(
+    embedding=embeddings,
+    api_token="your-token",
+    collection_name="hybrid_collection",
     fields=[
         {"name": "dense", "type": "vector",
-         "params": {"dimension": 384, "space_type": "cosine", "precision": "int8"}},
+         "params": {"dimension": DIMENSION, "space_type": "cosine", "precision": "int8"}},
         {"name": "sparse", "type": "sparse", "sparse_model": "default"},
     ],
+    retrieval_mode=RetrievalMode.HYBRID,
+    sparse_embedding=sparse,
     force_recreate=True,
 )
+```
 
-# Upsert with user-provided sparse vectors
-store.add_objects([{
-    "id": uuid.uuid4().hex,
-    "meta": {"text": "Python ML libraries", "metadata": {"lang": "Python"}},
-    "filter": {"lang": "Python"},
-    "fields": {
-        "dense": store.embedder(["Python ML libraries"])[0].tolist(),
-        "sparse": {"indices": [10, 42, 99], "values": [0.9, 0.4, 0.7]},
-    },
-}])
+All search methods automatically use both dense and sparse:
 
-# Search both fields with user-provided sparse query
-raw = store.multi_field_search(fields={
-    "dense":  {"query": store.embedder(["ML"])[0].tolist(), "limit": 3},
-    "sparse": {"query": {"indices": [10, 42], "values": [0.8, 0.5]}, "limit": 3},
-})
-fused = rerank(raw, limit=3, field_weights={"dense": 0.5, "sparse": 0.5})
+```python
+results = hybrid_store.similarity_search("vector database semantic search", k=3)
+```
+
+### RRF Tuning
+
+```python
+results = hybrid_store.similarity_search_with_score(
+    query="vector database semantic search",
+    k=3,
+    rrf_rank_constant=60,
+    dense_rrf_weight=0.7,
+)
 ```
 
 ---
 
-## Multi-Vector Mode
+## 4. Multi-Field & Multi-Vector
 
-Add a `multi_vector` field for per-chunk or ColBERT-style embeddings:
+### Multiple Dense Fields
+
+Use `fields=` with multiple `vector` entries, then `add_objects()` and `multi_field_search_with_rerank()`:
 
 ```python
 store = EndeeVectorStore(
-    type="demo_multi_vector",
-    embedder_config=embedder_config,
+    embedding=embeddings,
+    api_token="your-token",
+    collection_name="multi_field",
     fields=[
-        {"name": "dense", "type": "vector",
+        {"name": "title",   "type": "vector",
          "params": {"dimension": 384, "space_type": "cosine", "precision": "int8"}},
-        {"name": "chunks", "type": "multi_vector",
-         "params": {"dimension": 384, "space_type": "cosine",
-                    "precision": "int8", "pooling": "mean"}},
+        {"name": "content", "type": "vector",
+         "params": {"dimension": 768, "space_type": "cosine", "precision": "int8"}},
+        {"name": "keywords","type": "sparse", "sparse_model": "default"},
+    ],
+    dense_field_name="title",   # primary field for similarity_search()
+    force_recreate=True,
+)
+
+# Upsert with per-field data
+store.add_objects([{
+    "id": "doc1",
+    "meta": {"text": "...", "metadata": {...}},
+    "filter": {"topic": "ai"},
+    "fields": {
+        "title":   title_vec,
+        "content": content_vec,
+        "keywords": {"indices": [10, 42], "values": [0.9, 0.4]},
+    },
+}])
+
+# Search + fuse with weighted RRF
+results = store.multi_field_search_with_rerank(
+    fields={
+        "title":   {"query": title_vec,   "limit": 20},
+        "content": {"query": content_vec, "limit": 20},
+    },
+    limit=10,
+    field_weights={"title": 0.4, "content": 0.6},
+)
+```
+
+### Multi-Vector (ColBERT-style)
+
+A `multi_vector` field stores N vectors per object (one per token/chunk):
+
+```python
+store = EndeeVectorStore(
+    embedding=embeddings,
+    api_token="your-token",
+    collection_name="colbert_collection",
+    fields=[
+        {"name": "dense",   "type": "vector",
+         "params": {"dimension": 384, "space_type": "cosine", "precision": "int8"}},
+        {"name": "colbert", "type": "multi_vector",
+         "params": {"dimension": 128, "space_type": "cosine",
+                    "precision": "float16", "pooling": "mean"}},
     ],
     force_recreate=True,
 )
 
-# Upsert with multi-vector data via add_objects
+# Upsert: colbert field gets a list of vectors
 store.add_objects([{
-    "id": uuid.uuid4().hex,
-    "meta": {"text": "Long article about distributed systems.", "metadata": {}},
-    "filter": {},
+    "id": "doc1",
+    "meta": {"text": "..."},
+    "filter": {"topic": "ai"},
     "fields": {
-        "dense": store.embedder(["Long article about distributed systems."])[0].tolist(),
-        "chunks": [[0.1, ...], [0.3, ...], [0.5, ...]],  # pre-computed chunk embeddings
+        "dense":   [0.1, 0.2, ...],                  # 1 vector
+        "colbert": [[0.1, ...], [0.2, ...], ...],     # N vectors
     },
 }])
 
-# Dense-only search still works
-results = store.search("distributed systems", limit=3)
+# Search: query is also a list of vectors
+raw = store.multi_field_search(
+    fields={"colbert": {"query": [[q1], [q2], [q3]], "limit": 10}},
+)
 
-# Multi-field search with rerank
-raw = store.multi_field_search(fields={
-    "dense":  {"query": store.embedder(["consensus"])[0].tolist(), "limit": 3},
-    "chunks": {"query": [[0.1, ...], [0.3, ...]], "limit": 3},
-})
-fused = rerank(raw, limit=3, field_weights={"dense": 0.6, "chunks": 0.4})
+# Or fuse dense + ColBERT
+results = store.multi_field_search_with_rerank(
+    fields={
+        "dense":   {"query": dense_vec,  "limit": 10},
+        "colbert": {"query": token_vecs, "limit": 10},
+    },
+    limit=5,
+    field_weights={"dense": 0.5, "colbert": 0.5},
+)
+```
+
+### Manual Rerank
+
+```python
+from langchain_endee import rerank
+
+raw = store.multi_field_search(fields={...})
+fused = rerank(raw, limit=10, field_weights={"title": 0.3, "content": 0.7}, rrf_k=60)
 ```
 
 ---
 
-## Search with Filters
+## 5. Filters
 
-Endee uses MongoDB-style operator syntax:
+Pass filters as a list of dicts (AND logic). See [Endee docs](https://docs.endee.io) for filter operators (`$eq`, `$in`, `$range`).
 
 ```python
-# Filter by exact match
-results = store.search("web language", limit=3, filter=[{"lang": {"$eq": "Python"}}])
-
-# Filter with score threshold
-results = store.search("systems", limit=3, score_threshold=0.3)
-
-# Include raw vectors in results
-results = store.search("Python", limit=1, include_vectors=True)
-
-# HNSW tuning
-results = store.search("query", limit=3, ef_search=256)
-
-# Filtered search tuning
-results = store.search(
-    "query", limit=3,
-    filter=[{"category": {"$eq": "systems"}}],
-    prefilter_cardinality_threshold=5000,
-    filter_boost_percentage=50,
+# $eq
+results = vector_store.similarity_search(
+    query="learning from data", k=5,
+    filter=[{"topic": {"$eq": "ai"}}],
 )
-```
 
-Supported operators: `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`
+# Multiple filters (AND)
+results = vector_store.similarity_search(
+    query="safe languages", k=5,
+    filter=[
+        {"topic": {"$eq": "programming"}},
+        {"language": {"$in": ["python", "rust"]}},
+    ],
+)
 
----
+# Retriever with filters
+retriever = vector_store.as_retriever(
+    search_kwargs={"k": 3, "filter": [{"topic": {"$eq": "ai"}}]},
+)
 
-## Collection Operations
+# get_by_ids / update_filters / delete
+docs = vector_store.get_by_ids(["id1", "id2"])
 
-```python
-# Describe collection metadata
-info = store.describe()
+vector_store.update_filters([
+    {"id": "id1", "filter": {"topic": "updated", "priority": 1}},
+])
 
-# Retrieve objects by ID
-objects = store.get_objects(["id1", "id2"])
-
-# Retrieve a single object by ID
-obj = store.get_vector("some_id")
-
-# Update filter metadata without re-embedding
-store.update_filters([{"id": "some_id", "filter": {"reviewed": "true"}}])
-
-# Delete a single object by ID
-store.delete_vector("some_id")
-
-# Delete all objects matching a filter
-store.delete(filter=[{"category": {"$eq": "outdated"}}])
-
-# Delete the entire collection
-store.reset()
-
-# Close the connection
-store.close()
+vector_store.delete(ids=["id1", "id2"])
+vector_store.delete(filter=[{"status": {"$eq": "expired"}}])
 ```
 
 ---
 
-## CrewAI Integration
-
-`EndeeVectorStore` extends CrewAI's `BaseRAGStorage`. Wire it into a Crew via `ShortTermMemory` and `EntityMemory`:
+## 6. RAG Chain
 
 ```python
-from crewai import LLM, Agent, Crew, Process, Task
-from crewai.memory.short_term.short_term_memory import ShortTermMemory
-from crewai.memory.entity.entity_memory import EntityMemory
-from crewai_endee import EndeeVectorStore
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 
-embedder_config = {
-    "provider": "sentence-transformer",
-    "config": {"model_name": "all-MiniLM-L6-v2"},
-}
 
-fields = [
-    {"name": "dense", "type": "vector",
-     "params": {"dimension": 384, "space_type": "cosine", "precision": "int8"}},
-]
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
 
-stm_store = EndeeVectorStore(
-    type="crew_short_term",
-    embedder_config=embedder_config,
-    fields=fields,
+
+retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+prompt = ChatPromptTemplate.from_template(
+    "Answer the question based only on the context below.\n\n"
+    "Context:\n{context}\n\n"
+    "Question: {question}"
 )
 
-entity_store = EndeeVectorStore(
-    type="crew_entity",
-    embedder_config=embedder_config,
-    fields=fields,
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
 )
 
-short_term_memory = ShortTermMemory(storage=stm_store)
-entity_memory = EntityMemory(storage=entity_store)
-
-llm = LLM(model="gemini/gemini-2.5-flash", api_key=GOOGLE_API_KEY)
-
-agent = Agent(
-    role="Software Analyst",
-    goal="Extract programming language characteristics",
-    backstory="You study programming language design.",
-    llm=llm,
-)
-
-task = Task(
-    description="Analyse key characteristics of Python, Java, and Go.",
-    expected_output="Structured summary of each language.",
-    agent=agent,
-)
-
-crew = Crew(
-    agents=[agent],
-    tasks=[task],
-    process=Process.sequential,
-    memory=True,
-    short_term_memory=short_term_memory,
-    entity_memory=entity_memory,
-    embedder=embedder_config,
-    verbose=True,
-)
-
-result = crew.kickoff()
+answer = rag_chain.invoke("How does vector search work?")
+print(answer)
 ```
 
 ---
 
-## API Reference
+## Field Types
 
-### Constructor
+| Type | Shape per object | Use case |
+|---|---|---|
+| `vector` | `[float, ...]` | Standard single-embedding (sentence-transformers, OpenAI) |
+| `sparse` | `{indices: [int], values: [float]}` | BM25 / SPLADE keyword matching |
+| `multi_vector` | `[[float, ...], ...]` | Token-level (ColBERT), chunk-level embeddings |
 
-```python
-EndeeVectorStore(
-    type: str,                          # Collection name (required)
-    embedder_config: dict,              # Dense embedder config (required)
-    fields: list[dict],                 # Field definitions (required)
-    api_token: str = None,              # Endee API token
-    base_url: str = None,               # Custom API URL
-    endee_client: EndeeClient = None,   # Pre-existing client
-    sparse_embedding: SparseEmbeddings = None,  # Custom sparse model
-    content_payload_key: str = "text",
-    metadata_payload_key: str = "metadata",
-    force_recreate: bool = False,       # Delete and recreate if exists
-)
-```
+## Constructor Parameters
 
-### Field Types
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `embedding` | `Embeddings` | *required* | LangChain embedding function |
+| `collection_name` | `str` | *required* | Name of the Endee collection |
+| `fields` | `list[dict]` | `None` | Field definitions (same as Python client) |
+| `api_token` | `str \| None` | `None` | From [app.endee.io](https://app.endee.io) (None for local) |
+| `base_url` | `str \| None` | `None` | API base URL (e.g. `http://localhost:8000/api/v2`) |
+| `retrieval_mode` | `RetrievalMode` | `DENSE` | `DENSE` or `HYBRID` |
+| `sparse_embedding` | `SparseEmbeddings \| None` | `None` | Sparse model for hybrid search |
+| `dense_field_name` | `str` | `"dense"` | Primary dense field for `similarity_search()` |
+| `sparse_field_name` | `str` | `"sparse"` | Sparse field for hybrid search |
+| `force_recreate` | `bool` | `False` | Delete and recreate collection if exists |
+| `validate_collection_config` | `bool` | `True` | Validate dimension/config on connect |
 
-```python
-# Dense vector
-{"name": "dense", "type": "vector",
- "params": {"dimension": 384, "space_type": "cosine",
-            "precision": "int8", "M": 16, "ef_con": 128}}
+## Links
 
-# Sparse (endee_bm25 — auto-encoded)
-{"name": "sparse", "type": "sparse", "sparse_model": "endee_bm25"}
+- [Endee Documentation](https://docs.endee.io)
+- [Endee GitHub](https://github.com/endee-io/endee)
+- [Endee Server](https://app.endee.io)
 
-# Sparse (default — user provides vectors)
-{"name": "sparse", "type": "sparse", "sparse_model": "default"}
+## License
 
-# Multi-vector
-{"name": "chunks", "type": "multi_vector",
- "params": {"dimension": 128, "space_type": "cosine",
-            "precision": "float16", "pooling": "mean"}}
-```
-
-### Methods
-
-| Method | Description |
-|--------|-------------|
-| `save(value, metadata)` | Embed text and upsert (dense + auto sparse) |
-| `search(query, limit, filter, ...)` | Search with optional filters and RRF fusion |
-| `add_objects(objects)` | Upsert arbitrary per-field data |
-| `multi_field_search(fields, filter)` | Search multiple fields, raw per-field results |
-| `ensure_collection()` | Verify collection exists |
-| `describe()` | Collection metadata |
-| `get_objects(ids)` | Retrieve objects by ID list |
-| `get_vector(id)` | Retrieve single object by ID |
-| `update_filters(updates)` | Update filter metadata without re-embedding |
-| `delete_vector(id)` | Delete single object by ID |
-| `delete(filter)` | Delete by metadata filter |
-| `reset()` | Delete entire collection |
-| `close()` | Close HTTP connection |
-
-### Search Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `query` | *(required)* | Natural-language search query |
-| `limit` | `3` | Max results |
-| `filter` | `None` | `[{"field": {"$op": value}}]` |
-| `score_threshold` | `0` | Minimum similarity score |
-| `ef_search` | `None` | HNSW ef (default 128, max 1024) |
-| `include_vectors` | `False` | Fetch raw vector data |
-| `field_weights` | `None` | Per-field RRF weights (sum to 1.0) |
-| `rrf_k` | `60` | RRF rank constant |
-| `prefilter_cardinality_threshold` | `None` | Brute-force pre-filter threshold |
-| `filter_boost_percentage` | `None` | Candidate pool expansion (0-100) |
-
-### Exports
-
-```python
-from crewai_endee import (
-    EndeeVectorStore,
-    EndeeModelSparse,
-    SparseEmbeddings,
-    SparseVector,
-    Precision,
-    rerank,
-)
-```
-
----
-
-Full Endee documentation: [docs.endee.io](https://docs.endee.io) | GitHub: [endee-io/endee](https://github.com/endee-io/endee) | CrewAI docs: [docs.crewai.com](https://docs.crewai.com)
+MIT License

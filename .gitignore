@@ -1,44 +1,180 @@
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
+*.py[cod]
+*$py.class
 *.pyc
 *.pyo
-*.pyd
-*.egg-info/
-*.egg
+
+# C extensions
+*.so
 
 # Distribution / packaging
-dist/
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# Python virtual environment
-env/
-env/*
-venv/
-venv/*
+# PyInstaller
+*.manifest
+*.spec
 
-# Environment / secrets
-.env
-.env.*
-!.env.example
-
-# Test & coverage artifacts
-.pytest_cache/
-.coverage
-coverage.xml
+# Unit test / coverage reports
 htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+.hypothesis/
 
-# Ruff cache
-.ruff_cache/
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+env/
 
-# Jupyter notebooks
-*.ipynb
-
-# Examples
-examples/
-
-# Editor / IDE
+# IDEs
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+examples/
+my_documents/
+
+# OS files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Markdown docs (generated tutorials etc.)
+
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Secrets and credentials
+secrets/
+credentials/
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+
+# FastEmbed / Model cache
+.fastembed_cache/
+models/
+*.onnx
+*.bin
+
+# LangChain / Vector DB
+.chroma/
+*.db
+*.sqlite
+*.sqlite3
+chroma.db
+
+# Documentation builds
+docs/_build/
+docs/.doctrees/
+site/
+.mkdocs/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+log/
+
+# Data files (uncomment if you don't want to track data)
+# *.csv
+# *.json
+# *.pkl
+# *.pickle
+# data/
+
+# Test outputs
+test_output/
+test_results/
+test-results/
+
+# Local development
+.local/
+local/
+scratch/
+playground/
+
+# Package manager
+poetry.lock
+Pipfile.lock
+pdm.lock
+
+# Ruff
+.ruff_cache/
+

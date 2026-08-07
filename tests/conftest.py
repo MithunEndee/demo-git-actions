@@ -1,66 +1,36 @@
-"""Shared pytest fixtures for the endee-crewai test suite.
+"""Shared pytest fixtures for the endee-langchain test suite.
 
 Provides:
 - `MockEndee`/`MockEndeeCollection`: a mock backend (unit tests).
-- `mock_endee_client`: patches `crewai_endee.vector_store.EndeeClient`
+- `mock_endee_client`: patches `langchain_endee.vectorstores.EndeeClient`
   with a factory that returns a fresh `MockEndee()` per test.
-- `fake_embedder`: a deterministic, dependency-free embedding callable.
-- `make_store`: builds an `EndeeVectorStore` against the mocked client.
+- `fake_embedder`: a deterministic hash-based dense `Embeddings`, with no
+  ML model.
+- `fake_sparse_embedding`/`fake_raw_sparse_model`: deterministic sparse
+  embedding fakes.
 - `live_client`: a real `endee.Endee` client that skips if
   `ENDEE_API_TOKEN` is unset (integration tests).
 """
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import uuid
 
 import numpy as np
 import pytest
-from crewai.rag.embeddings.providers.custom.embedding_callable import (
-    CustomEmbeddingFunction,
-)
-from endee import Endee
 from endee.exceptions import NotFoundException
+from langchain_core.embeddings import Embeddings
 
-from crewai_endee.vector_store import EndeeVectorStore
-
-ALL_PRECISIONS = ["float32", "float16", "int16", "int8", "binary"]
-ALL_SPACE_TYPES = ["cosine", "l2", "ip"]
+from langchain_endee.sparse_embeddings import SparseEmbeddings, SparseVector
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Deterministic embedder for integration tests
-# ═══════════════════════════════════════════════════════════════════════════
-
-LIVE_DIM = 384
-
-
-class _DeterministicEmbeddingFunction(CustomEmbeddingFunction):
-    """Deterministic embedder that skips downloading a real ML model."""
-
-    def __call__(self, input):
-        vectors = []
-        for text in input:
-            digest = hashlib.sha256(text.encode("utf-8")).digest()
-            repeated = (digest * (LIVE_DIM // len(digest) + 1))[:LIVE_DIM]
-            vectors.append([b / 255.0 for b in repeated])
-        return vectors
-
-
-LIVE_EMBEDDER_CONFIG = {
-    "provider": "custom",
-    "config": {"embedding_callable": _DeterministicEmbeddingFunction},
-}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Integration-test collection naming & cleanup helpers
+# Integration-test helpers (shared collection naming + cleanup)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-_UID_PREFIX = "crewai_test"
+_UID_PREFIX = "langchain_test"
 _STALE_PATTERN = re.compile(rf"^{_UID_PREFIX}_[0-9a-f]{{10}}$")
 
 
@@ -132,8 +102,8 @@ class MockEndeeCollection:
             limit = field_query.get("limit", 10)
 
             if isinstance(query_data, dict) and "indices" in query_data:
-                # Sparse query: this fake has no BM25/similarity scoring, so
-                # it always returns no hits. Assert on call args instead.
+                # This fake has no BM25 scoring, so sparse fields always
+                # return no hits; assert on call args instead of results.
                 per_field_results[field_name] = []
                 continue
 
@@ -183,11 +153,11 @@ class MockEndeeCollection:
     def get_objects(self, ids):
         return [self._store[vid] for vid in ids if vid in self._store]
 
-    def delete_by_filter(self, filter_list):
+    def delete_by_filter(self, filter):  # noqa: A002
         to_delete = [
             vid
             for vid, entry in self._store.items()
-            if self._matches_filter(entry, filter_list)
+            if self._matches_filter(entry, filter)
         ]
         for vid in to_delete:
             del self._store[vid]
@@ -234,76 +204,154 @@ class MockEndee:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Shared collection field and document data, used by unit and integration tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+DIMENSION = 16
+
+ALL_PRECISIONS = ["float32", "float16", "int16", "int8", "binary"]
+ALL_SPACE_TYPES = ["cosine", "l2", "ip"]
+
+DENSE_FIELD = {
+    "name": "dense",
+    "type": "vector",
+    "params": {"dimension": DIMENSION, "space_type": "cosine", "precision": "int8"},
+}
+
+TEXTS = [
+    "Python is a high-level programming language.",
+    "Rust is a systems language focused on safety.",
+    "Machine learning enables systems to learn from data.",
+    "Deep learning uses neural networks with multiple layers.",
+    "Vector databases store embeddings for similarity search.",
+]
+
+METADATAS = [
+    {"category": "programming", "language": "python", "difficulty": "beginner"},
+    {"category": "programming", "language": "rust", "difficulty": "advanced"},
+    {"category": "ai", "field": "ml", "difficulty": "intermediate"},
+    {"category": "ai", "field": "dl", "difficulty": "advanced"},
+    {"category": "database", "type": "vector", "difficulty": "intermediate"},
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Deterministic fake embedders (no ML model download)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class FakeEmbeddings(Embeddings):
+    """Deterministic hash-based embeddings, no ML model download."""
+
+    def __init__(self, dimension: int = DIMENSION):
+        self.dimension = dimension
+
+    def embed_documents(self, texts):
+        return [
+            [(hash(t) + i) % 100 / 100.0 for i in range(self.dimension)] for t in texts
+        ]
+
+    def embed_query(self, text):
+        return self.embed_documents([text])[0]
+
+
+class FakeSparseEmbeddings(SparseEmbeddings):
+    """Deterministic sparse embeddings, no ML model download."""
+
+    def embed_documents(self, texts):
+        vecs = []
+        for t in texts:
+            indices = sorted(set(hash(w) % 1000 for w in t.split()[:10]))
+            values = [1.0 / (i + 1) for i in range(len(indices))]
+            vecs.append(SparseVector(indices=indices, values=values))
+        return vecs
+
+    def embed_query(self, text):
+        return self.embed_documents([text])[0]
+
+
+class _TolistArray(list):
+    """A list that also exposes .tolist(), like fastembed/endee_model's outputs."""
+
+    def tolist(self):
+        return list(self)
+
+
+def make_fake_sparse_result(indices, values):
+    """Build an object exposing `.indices.tolist()` / `.values.tolist()`."""
+
+    class _Result:
+        def __init__(self):
+            self.indices = _TolistArray(indices)
+            self.values = _TolistArray(values)
+
+    return _Result()
+
+
+class FakeRawSparseModel:
+    """Fastembed-style fake (.embed/.query_embed), not a SparseEmbeddings subclass."""
+
+    def embed(self, texts):
+        for t in texts:
+            indices = sorted(set(hash(w) % 1000 for w in t.split()[:10]))
+            values = [1.0 / (i + 1) for i in range(len(indices))]
+            yield make_fake_sparse_result(indices, values)
+
+    def query_embed(self, text):
+        yield from self.embed([text])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Fixtures
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @pytest.fixture
 def mock_endee_client(monkeypatch):
-    """Patch EndeeClient with a fresh MockEndee factory so tests don't share state."""
-    monkeypatch.setattr("crewai_endee.vector_store.EndeeClient", MockEndee)
-    return MockEndee
-
-
-@pytest.fixture
-def fake_embedder():
-    """Deterministic embedding callable: embed(texts) returns one vector per text."""
-    dim = 16
-
-    def _vector_for(text: str):
-        digest = hashlib.sha256(text.encode("utf-8")).digest()
-        return [b / 255.0 for b in digest[:dim]]
-
-    def embed(texts):
-        return [_vector_for(t) for t in texts]
-
-    return embed
-
-
-@pytest.fixture
-def make_store(monkeypatch, mock_endee_client, fake_embedder):
-    """Factory for an EndeeVectorStore with defaults callers can override via kwargs."""
+    """Patch EndeeClient with a factory returning a fresh MockEndee() per test."""
+    # Stores built within the same test share this instance; other tests get
+    # an isolated one.
+    instance = MockEndee()
     monkeypatch.setattr(
-        "crewai_endee.vector_store.build_embedder", lambda cfg: fake_embedder
+        "langchain_endee.vectorstores.EndeeClient",
+        lambda *args, **kwargs: instance,
     )
+    return instance
 
-    def _make(**kwargs):
-        defaults = dict(
-            type="test_collection",
-            embedder_config={"provider": "fake", "config": {}},
-            fields=[
-                {
-                    "name": "dense",
-                    "type": "vector",
-                    "params": {
-                        "dimension": 16,
-                        "space_type": "cosine",
-                        "precision": "float32",
-                    },
-                },
-            ],
-        )
-        defaults.update(kwargs)
-        return EndeeVectorStore(**defaults)
 
-    return _make
+@pytest.fixture(scope="session")
+def fake_embedder():
+    """Session-scoped since it's stateless and integration fixtures need this scope."""
+    return FakeEmbeddings()
+
+
+@pytest.fixture(scope="session")
+def fake_sparse_embedding():
+    """Session-scoped for the same reason as fake_embedder above."""
+    return FakeSparseEmbeddings()
+
+
+@pytest.fixture
+def fake_raw_sparse_model():
+    return FakeRawSparseModel()
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _cleanup_stale_collections():
     """Removes leftover collections from a prior interrupted test run."""
     # No-op if no token is set, since unit tests must still run without a live server.
-    token = os.environ.get("ENDEE_API_TOKEN")
+    token = os.environ.get("ENDEE_API_TOKEN", "")
     if not token:
         yield
         return
     try:
+        from endee import Endee
+
         base_url = os.environ.get("ENDEE_BASE_URL")
         client = Endee(token=token)
         if base_url:
             client.set_base_url(base_url)
-        existing = client.list_collections()
-        for coll in existing:
+        for coll in client.list_collections():
             name = coll.get("name") if isinstance(coll, dict) else coll
             if name and _STALE_PATTERN.match(name):
                 safe_delete(client, name)
@@ -312,14 +360,24 @@ def _cleanup_stale_collections():
     yield
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def live_client():
-    """Real endee.Endee client. Skips if ENDEE_API_TOKEN is unset."""
-    token = os.getenv("ENDEE_API_TOKEN")
+    """Real endee.Endee client; skips if ENDEE_API_TOKEN is unset."""
+    token = os.environ.get("ENDEE_API_TOKEN", "")
     if not token:
-        pytest.skip("ENDEE_API_TOKEN not set, skipping integration test")
-    base_url = os.getenv("ENDEE_BASE_URL")
+        pytest.skip("ENDEE_API_TOKEN not set; skipping integration test")
+
+    from endee import Endee
+
+    base_url = os.environ.get("ENDEE_BASE_URL")
     client = Endee(token=token)
     if base_url:
         client.set_base_url(base_url)
-    return client
+
+    yield client
+
+    # Safety net for tests that build a collection without a cleanup fixture.
+    for coll in client.list_collections():
+        name = coll.get("name") if isinstance(coll, dict) else coll
+        if name and _STALE_PATTERN.match(name):
+            safe_delete(client, name)

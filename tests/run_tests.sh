@@ -5,8 +5,8 @@ usage() {
   cat <<EOF
 Usage: $0 [--token <api_token>] [--base-url <url>] [--unit] [--integration] [--clean] [-- <pytest args>]
 
-Run the endee-crewai test suite. Creates a venv, installs dependencies, sets
-environment variables, and invokes pytest.
+Run the endee-langchain test suite. It creates a venv, installs dependencies,
+sets environment variables, and invokes pytest.
 
 Two kinds of tests, selected automatically or explicitly:
   unit         Fast, no network. The endee client is mocked. No token needed.
@@ -24,8 +24,7 @@ Options:
 
 Environment overrides:
   PYTHON_BIN    Python interpreter to build the venv with (defaults to "python3"
-                on PATH). This package requires Python >=3.10,<3.14.
-                Example: PYTHON_BIN=python3.12 $0 --unit
+                on PATH). Example: PYTHON_BIN=python3.12 $0 --unit
 
 Examples:
   # Unit tests only (fast, no server needed): the common local/CI case
@@ -40,7 +39,7 @@ Examples:
   # Integration tests only
   $0 --token <api_token> --integration
 
-  # Fresh environment: recreate venv before the run and clean up after
+  # Fresh environment: recreate venv before and clean up after
   $0 --unit --clean
 
   # Run a single test file
@@ -113,7 +112,7 @@ source "$VENV_DIR/bin/activate"
 echo "Installing dependencies ..."
 pip install --quiet --upgrade pip
 pip install --quiet -e .
-pip install --quiet pytest pytest-mock pytest-timeout numpy
+pip install --quiet pytest pytest-mock pytest-timeout pytest-asyncio numpy
 
 if [[ -n "$TOKEN" ]]; then
   export ENDEE_API_TOKEN="$TOKEN"

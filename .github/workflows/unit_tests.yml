@@ -1,11 +1,11 @@
-name: CrewAI Unit Tests
+name: LangChain Unit Tests
 
 # on: [push, pull_request]
 on: workflow_dispatch
 
 jobs:
   unit-test:
-    name: CrewAI Unit Tests
+    name: LangChain Unit Tests
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -23,7 +23,7 @@ jobs:
         run: pip install -e .
 
       - name: Install test dependencies
-        run: pip install pytest pytest-mock pytest-timeout
+        run: pip install pytest pytest-mock pytest-timeout pytest-asyncio
 
       - name: Run unit tests
         run: pytest -m unit -v --timeout=60 --tb=short -p no:warnings --junit-xml=test-results.xml

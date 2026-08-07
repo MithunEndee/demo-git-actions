@@ -1,4 +1,4 @@
-name: CrewAI Integration Tests
+name: LangChain Integration Tests
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ on:
 
 jobs:
   integration-test:
-    name: CrewAI Integration Tests
+    name: LangChain Integration Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -43,12 +43,7 @@ jobs:
           ENDEE_API_TOKEN: ${{ inputs.token }}
           ENDEE_BASE_URL: ${{ inputs.base_url }}
         run: |
-          pytest -m integration \
-            -v \
-            --timeout=180 \
-            --tb=short \
-            -p no:warnings \
-            --junit-xml=test-results.xml
+          pytest -m integration -v --timeout=180 --tb=short -p no:warnings --junit-xml=test-results.xml
 
       - name: Write job summary
         if: always()
@@ -81,7 +76,7 @@ jobs:
               duration = f"{mins}m {secs}s" if mins else f"{secs}s"
 
               lines = [
-                  f"## Endee Integration Test Results",
+                  f"## LangChain Functional Test Results",
                   "",
                   "| Result   | Count |",
                   "|----------|------:|",
@@ -156,6 +151,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: crewai-integration-test-results
+          name: langchain-integration-test-results
           path: test-results.xml
           retention-days: 3
