@@ -1,16 +1,16 @@
-from endee import Precision
-from endee import rerank
+"""llama-index-vector-stores-endee — Endee vector database integration for LlamaIndex."""
 
-from langchain_endee.sparse_embeddings import (
+from endee import Precision, rerank
+
+from .base import EndeeVectorStore
+from .sparse_embeddings import (
     EndeeModelSparse,
     SparseEmbeddings,
     SparseVector,
 )
-from langchain_endee.vectorstores import EndeeVectorStore, RetrievalMode
 
 __all__ = [
     "EndeeVectorStore",
-    "RetrievalMode",
     "SparseEmbeddings",
     "SparseVector",
     "EndeeModelSparse",

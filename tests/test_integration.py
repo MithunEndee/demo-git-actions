@@ -1,19 +1,21 @@
 """Integration tests: all tests that require a live/local Endee server
 (set `ENDEE_API_TOKEN`).
 
-`TestVectorStoreIntegration` covers live CRUD, config validation (incl.
-mismatch detection on reconnect), filter assertions, client construction,
-collection lifecycle, and factory-method coverage for `EndeeVectorStore`
+`TestVectorStoreIntegration` covers core CRUD (create-or-reuse, add/query,
+delete, clear, fetch, precision/space_type/HNSW params verified via
+describe(), batching, client construction, and collection lifecycle) against
+a real server.
+
+`TestFiltersIntegration` covers filter/metadata-key translation end-to-end
 against a real server.
 
-`TestMultiFieldIntegration` covers a live collection with separate title,
-content, and keywords fields.
+`TestSparseIntegration` covers sparse/hybrid collections end-to-end,
+including both endee_bm25 and a custom sparse embedding, against a real
+server.
 
-`TestSparseIntegration` covers live hybrid/BM25 auto-detection and search
-against a real server.
-
-`TestMultiVectorIntegration` covers a live collection with a dense field
-and a multi_vector field.
+`TestRetrieval` exercises the actual LlamaIndex framework objects
+(VectorStoreIndex, VectorIndexRetriever, RetrieverQueryEngine, and
+query_str back-compat) end-to-end, not just EndeeVectorStore directly.
 """
 
 from __future__ import annotations
@@ -21,32 +23,32 @@ from __future__ import annotations
 import os
 
 import pytest
-from conftest import (
-    ALL_SPACE_TYPES,
-    DENSE_FIELD,
-    DIMENSION,
-    METADATAS,
-    TEXTS,
-    FakeRawSparseModel,
-    safe_delete,
-    uid,
+from conftest import ALL_PRECISIONS, ALL_SPACE_TYPES, safe_delete, uid
+from llama_index.core import Settings, StorageContext, VectorStoreIndex
+from llama_index.core.query_engine import RetrieverQueryEngine
+from llama_index.core.retrievers import VectorIndexRetriever
+from llama_index.core.schema import TextNode
+from llama_index.core.vector_stores.types import (
+    FilterOperator,
+    MetadataFilter,
+    MetadataFilters,
+    VectorStoreQuery,
 )
-from langchain_core.documents import Document
 
-from langchain_endee import EndeeVectorStore, RetrievalMode
-from langchain_endee.vectorstores import EndeeVectorStoreError
+from llama_index_endee.base import EndeeVectorStore
+from llama_index_endee.sparse_embeddings import SparseEmbeddings, SparseVector
 
 
-def _new_simple_store(live_client, fake_embedder, name, **kwargs):
-    """Build a simple-mode (dimension=) live store, defaulting dimension/recreate."""
-    kwargs.setdefault("dimension", DIMENSION)
-    kwargs.setdefault("force_recreate", True)
-    return EndeeVectorStore(
-        embedding=fake_embedder,
-        endee_client=live_client,
-        collection_name=name,
-        **kwargs,
-    )
+class _DeterministicSparseEmbedding(SparseEmbeddings):
+    """Deterministic hash-based sparse embedder, for testing custom sparse models."""
+
+    def embed_documents(self, texts):
+        return [self.embed_query(t) for t in texts]
+
+    def embed_query(self, text):
+        indices = sorted({hash(w) % 500 for w in text.lower().split()})
+        values = [1.0 / (i + 1) for i in range(len(indices))]
+        return SparseVector(indices=indices, values=values)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -56,758 +58,519 @@ def _new_simple_store(live_client, fake_embedder, name, **kwargs):
 
 @pytest.mark.integration
 class TestVectorStoreIntegration:
-    # ── Fixture ──────────────────────────────────────────────────────────
+    def test_from_params_creates_store(self, store_factory):
+        """from_params() must create a store with the given dimension and space_type."""
+        vs = store_factory(dimension=16, space_type="cosine")
+        assert vs.dimension == 16
+        assert vs.space_type == "cosine"
+        assert vs.client is not None
 
-    @pytest.fixture(scope="class")
-    def vector_store_dense_store(self, live_client, fake_embedder):
-        """Own live dense-only collection with TEXTS, shared across the class."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
+    def test_describe_returns_collection_metadata(self, store_factory):
+        """describe() must return a dict with a non-empty fields list."""
+        vs = store_factory(dimension=16, space_type="cosine")
+        info = vs.describe()
+        assert isinstance(info, dict)
+        assert "fields" in info
+        assert len(info["fields"]) > 0
+
+    def test_client_returns_endee_collection(self, store_factory):
+        """client property must expose upsert, search, describe, and update_filters."""
+        vs = store_factory(dimension=16, space_type="cosine")
+        client = vs.client
+        assert hasattr(client, "upsert")
+        assert hasattr(client, "search")
+        assert hasattr(client, "describe")
+        assert hasattr(client, "update_filters")
+
+    def test_default_precision_is_int8(self, store_factory):
+        """A collection created without an explicit precision must default to int8."""
+        vs = store_factory(dimension=16, space_type="cosine")
+        assert vs.precision == "int8"
+
+    def test_update_filters_wrapper(self, store_factory, fake_embedder):
+        """update_filters() must apply a filter update without error."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        text = "filter update test node"
+        node = TextNode(text=text, embedding=fake_embedder(text), id_="upd_node")
+        vs.add([node])
+        result = vs.update_filters(
+            [{"id": "upd_node", "filter": {"category": "updated"}}]
         )
-        ids = store.add_texts(
-            texts=TEXTS, metadatas=METADATAS, ids=[f"d{i}" for i in range(len(TEXTS))]
+        assert result is not None
+
+    def test_add_and_query(self, store_factory, fake_embedder):
+        """add() followed by query() must return the ids that were added."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        texts = ["Python is great", "Rust is fast", "ML is useful"]
+        nodes = [
+            TextNode(text=t, embedding=fake_embedder(t), id_=f"node_{i}")
+            for i, t in enumerate(texts)
+        ]
+        ids = vs.add(nodes)
+        assert set(ids) == {n.node_id for n in nodes}
+
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("Python"), similarity_top_k=2
         )
-        yield store, ids
-        safe_delete(live_client, name)
+        result = vs.query(query)
+        assert len(result.ids) == len(result.nodes)
 
-    # ── Properties ────────────────────────────────────────────────────────
+    def test_delete_is_noop_when_no_match(self, store_factory):
+        """delete() with a ref_doc_id that matches nothing must not raise."""
+        vs = store_factory(dimension=16, space_type="cosine")
+        vs.delete("some_ref_doc_id")  # should not raise
 
-    def test_properties(self, vector_store_dense_store):
-        """embeddings, client, and collection must be non-None on a connected store."""
-        store, _ = vector_store_dense_store
-        assert store.embeddings is not None
-        assert store.client is not None
-        assert store.collection is not None
+    def test_fetch_returns_list(self, store_factory, fake_embedder):
+        """fetch() against a live server must return a list."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        text = "Fetch me"
+        node = TextNode(text=text, embedding=fake_embedder(text), id_="fetch_test")
+        vs.add([node])
+        out = vs.fetch(["fetch_test"])
+        assert isinstance(out, list)
 
-    def test_field_map(self, vector_store_dense_store):
-        """field_map must expose the dense field with type 'vector'."""
-        store, _ = vector_store_dense_store
-        fm = store.field_map
-        assert "dense" in fm
-        assert fm["dense"]["type"] == "vector"
-
-    # ── similarity_search ─────────────────────────────────────────────────
-
-    def test_similarity_search(self, vector_store_dense_store):
-        """similarity_search must return up to k Document results."""
-        store, _ = vector_store_dense_store
-        results = store.similarity_search("programming language", k=3)
-        assert 0 < len(results) <= 3
-        assert isinstance(results[0], Document)
-
-    def test_similarity_search_with_score(self, vector_store_dense_store):
-        """similarity_search_with_score must return (Document, float) pairs."""
-        store, _ = vector_store_dense_store
-        results = store.similarity_search_with_score("machine learning", k=3)
-        assert len(results) > 0
-        doc, score = results[0]
-        assert isinstance(doc, Document)
-        assert isinstance(score, float)
-
-    def test_similarity_search_by_object(self, vector_store_dense_store, fake_embedder):
-        """similarity_search_by_object must return results for a raw vector."""
-        store, _ = vector_store_dense_store
-        vec = fake_embedder.embed_query("database")
-        results = store.similarity_search_by_object(vec, k=2)
-        assert len(results) > 0
-
-    def test_similarity_search_by_object_with_score(
-        self, vector_store_dense_store, fake_embedder
+    def test_query_with_prefilter_cardinality_threshold(
+        self, store_factory, fake_embedder
     ):
-        """Must return (Document, float) pairs given a raw embedding vector."""
-        store, _ = vector_store_dense_store
-        vec = fake_embedder.embed_query("neural networks")
-        results = store.similarity_search_by_object_with_score(vec, k=2)
-        assert len(results) > 0
-        _, score = results[0]
-        assert isinstance(score, float)
-
-    def test_ef_parameter(self, vector_store_dense_store):
-        """similarity_search must accept an ef override and still return results."""
-        store, _ = vector_store_dense_store
-        results = store.similarity_search("Python", k=2, ef=256)
-        assert len(results) > 0
-
-    def test_prefilter_and_boost(self, vector_store_dense_store):
-        """similarity_search must accept prefilter_cardinality_threshold and boost."""
-        store, _ = vector_store_dense_store
-        results = store.similarity_search(
-            "database",
-            k=2,
-            filter=[{"category": {"$eq": "database"}}],
-            prefilter_cardinality_threshold=1_000,
-            filter_boost_percentage=20,
+        """query() with prefilter_cardinality_threshold must succeed."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        text = "Python is great for data science"
+        vs.add([TextNode(text=text, embedding=fake_embedder(text), id_="seed")])
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("data science"), similarity_top_k=2
         )
-        assert results is not None
+        result = vs.query(query, prefilter_cardinality_threshold=10000)
+        assert isinstance(result.nodes, list)
+        assert len(result.ids) == len(result.nodes)
 
-    # ── get_by_ids ────────────────────────────────────────────────────────
+    def test_query_with_filter_boost_percentage(self, store_factory, fake_embedder):
+        """query() with filter_boost_percentage must return results without error."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        text = "Python is great for data science"
+        vs.add([TextNode(text=text, embedding=fake_embedder(text), id_="seed")])
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("data science"), similarity_top_k=2
+        )
+        result = vs.query(query, filter_boost_percentage=30)
+        assert isinstance(result.nodes, list)
 
-    def test_get_by_ids(self, vector_store_dense_store):
-        """get_by_ids must return documents for existing ids."""
-        store, ids = vector_store_dense_store
-        docs = store.get_by_ids(ids[:2])
-        assert len(docs) == 2
+    def test_query_with_both_filter_params(self, store_factory, fake_embedder):
+        """prefilter_cardinality_threshold and filter_boost_percentage combine fine."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        text = "Python is great for data science"
+        vs.add([TextNode(text=text, embedding=fake_embedder(text), id_="seed")])
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("data science"), similarity_top_k=2
+        )
+        result = vs.query(
+            query, prefilter_cardinality_threshold=50000, filter_boost_percentage=20
+        )
+        assert isinstance(result.nodes, list)
 
-    def test_get_by_ids_empty(self, vector_store_dense_store):
-        """get_by_ids must return an empty list when given no ids."""
-        store, _ = vector_store_dense_store
-        assert store.get_by_ids([]) == []
+    @pytest.mark.parametrize("precision", ALL_PRECISIONS, ids=lambda p: p)
+    def test_create_collection_with_precision(self, store_factory, precision):
+        """The server must actually create the field with the requested precision."""
+        vs = store_factory(dimension=16, space_type="cosine", precision=precision)
+        assert vs.precision == precision
+        dense_field = vs.describe()["fields"][0]
+        assert dense_field["params"]["precision"] == precision
 
-    def test_get_by_ids_nonexistent(self, vector_store_dense_store):
-        """get_by_ids must return an empty list for an id that does not exist."""
-        store, _ = vector_store_dense_store
-        assert store.get_by_ids(["fake_id_does_not_exist"]) == []
+    @pytest.mark.parametrize("space_type", ALL_SPACE_TYPES, ids=ALL_SPACE_TYPES)
+    def test_create_collection_with_space_type(self, store_factory, space_type):
+        """The server must actually create the field with the requested space_type."""
+        vs = store_factory(dimension=16, space_type=space_type)
+        assert vs.space_type == space_type
+        dense_field = vs.describe()["fields"][0]
+        assert dense_field["params"]["space_type"] == space_type
 
-    # ── update_filters ────────────────────────────────────────────────────
+    def test_create_collection_with_custom_hnsw_params(self, store_factory):
+        """The server must actually apply the requested M and ef_con HNSW params."""
+        vs = store_factory(dimension=16, space_type="cosine", M=32, ef_con=256)
+        dense_field = vs.describe()["fields"][0]
+        assert dense_field["params"]["M"] == 32
+        assert dense_field["params"]["ef_con"] == 256
 
-    def test_update_filters(self, vector_store_dense_store):
-        """update_filters must return a dict reporting an 'updated' count."""
-        store, ids = vector_store_dense_store
-        result = store.update_filters(
+    def test_batch_insert_150_documents(self, store_factory, fake_embedder):
+        """add() must handle 150 documents in batches, all of them queryable after."""
+        vs = store_factory(
+            dimension=fake_embedder.dim, space_type="cosine", batch_size=50
+        )
+        nodes = [
+            TextNode(
+                text=f"Document number {i} about topic {i % 5}",
+                embedding=fake_embedder(f"Document number {i} about topic {i % 5}"),
+                id_=f"doc_{i}",
+                metadata={"doc_id": str(i), "topic": str(i % 5)},
+            )
+            for i in range(150)
+        ]
+        ids = vs.add(nodes)
+        assert len(ids) == 150
+
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("document topic"), similarity_top_k=10
+        )
+        result = vs.query(query)
+        assert len(result.nodes) > 0
+
+    def test_use_existing_collection(self, store_factory, fake_embedder):
+        """A second store reusing a collection name queries data the first one added."""
+        vs1 = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        name = vs1.collection_name
+        text = "Test document in existing collection"
+        vs1.add([TextNode(text=text, embedding=fake_embedder(text), id_="doc1")])
+
+        vs2 = EndeeVectorStore.from_params(
+            endee_client=vs1._client,
+            collection_name=name,
+            dimension=fake_embedder.dim,
+            space_type="cosine",
+        )
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("test document"), similarity_top_k=1
+        )
+        result = vs2.query(query)
+        assert len(result.nodes) > 0
+
+    @pytest.mark.parametrize("top_k", [1, 3, 5])
+    def test_query_respects_similarity_top_k(self, store_factory, fake_embedder, top_k):
+        """query() must never return more nodes than similarity_top_k."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        texts = [f"programming topic number {i}" for i in range(6)]
+        nodes = [
+            TextNode(text=t, embedding=fake_embedder(t), id_=f"topk_{i}")
+            for i, t in enumerate(texts)
+        ]
+        vs.add(nodes)
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("programming"), similarity_top_k=top_k
+        )
+        result = vs.query(query)
+        assert len(result.nodes) <= top_k
+
+    def test_query_with_custom_ef_search(self, store_factory, fake_embedder):
+        """query() with a custom ef_search must still return results."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        text = "machine learning models need data"
+        vs.add([TextNode(text=text, embedding=fake_embedder(text), id_="ef_seed")])
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("machine learning"), similarity_top_k=3
+        )
+        result = vs.query(query, ef_search=256)
+        assert isinstance(result.nodes, list)
+        assert len(result.nodes) > 0
+
+    def test_query_similarity_scores_in_valid_cosine_range(
+        self, store_factory, fake_embedder
+    ):
+        """Cosine similarity scores returned by query() must fall within [-1.0, 1.0]."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        text = "Python programming for data science"
+        vs.add([TextNode(text=text, embedding=fake_embedder(text), id_="score_seed")])
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("Python programming"), similarity_top_k=3
+        )
+        result = vs.query(query)
+        assert len(result.similarities) > 0
+        for score in result.similarities:
+            assert -1.0 <= score <= 1.0
+
+    def test_delete_removes_matching_ref_doc_id_entries(
+        self, store_factory, fake_embedder
+    ):
+        """delete(ref_doc_id) must remove matching objects, not just avoid raising."""
+        from llama_index.core.schema import NodeRelationship, RelatedNodeInfo
+
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        text = "node scheduled for deletion"
+        node = TextNode(text=text, embedding=fake_embedder(text), id_="to_delete")
+        node.relationships[NodeRelationship.SOURCE] = RelatedNodeInfo(
+            node_id="doc_to_delete"
+        )
+        vs.add([node])
+
+        fetched_before = vs.fetch(["to_delete"])
+        assert len(fetched_before) == 1
+
+        vs.delete("doc_to_delete")
+
+        fetched_after = vs.fetch(["to_delete"])
+        assert fetched_after == []
+
+    def test_empty_query_returns_result_without_raising(
+        self, store_factory, fake_embedder
+    ):
+        """query() with no embedding must not raise."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        query = VectorStoreQuery(similarity_top_k=3)  # no embedding
+        result = vs.query(query)  # must not raise
+        assert isinstance(result.nodes, list)
+
+    def test_multi_vector_field_add_objects_and_multi_field_search(
+        self, store_factory, fake_embedder
+    ):
+        """A multi_vector field must accept add_objects() and yield per-field hits."""
+        dim = fake_embedder.dim
+        fields = [
+            {
+                "name": "dense",
+                "type": "vector",
+                "params": {
+                    "dimension": dim,
+                    "space_type": "cosine",
+                    "precision": "int8",
+                },
+            },
+            {
+                "name": "chunks",
+                "type": "multi_vector",
+                "params": {
+                    "dimension": dim,
+                    "space_type": "cosine",
+                    "precision": "float16",
+                    "pooling": "mean",
+                },
+            },
+        ]
+        vs = store_factory(fields=fields)
+
+        text = "Consensus algorithms in distributed systems"
+        dense_vec = fake_embedder(text)
+        chunk_vecs = [
+            fake_embedder("consensus"),
+            fake_embedder("distributed"),
+            fake_embedder("systems"),
+        ]
+        vs.add_objects(
             [
                 {
-                    "id": ids[0],
-                    "filter": {"category": "scripting", "language": "python"},
-                },
+                    "id": "mv1",
+                    "meta": {"text": text},
+                    "filter": {},
+                    "fields": {"dense": dense_vec, "chunks": chunk_vecs},
+                }
             ]
         )
-        assert isinstance(result, dict)
-        assert "updated" in result
 
-    def test_update_filters_empty_raises(self, vector_store_dense_store):
-        """update_filters must raise ValueError when given an empty list."""
-        store, _ = vector_store_dense_store
-        with pytest.raises(ValueError):
-            store.update_filters([])
-
-    # ── Filters ───────────────────────────────────────────────────────────
-
-    @pytest.fixture(scope="class")
-    def filter_store(self, live_client, fake_embedder):
-        """Own live dense-only collection with TEXTS, isolated from other tests."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
+        raw = vs.multi_field_search(
+            fields={
+                "dense": {"query": dense_vec, "limit": 3},
+                "chunks": {"query": chunk_vecs, "limit": 3},
+            }
         )
-        store.add_texts(
-            texts=TEXTS, metadatas=METADATAS, ids=[f"d{i}" for i in range(len(TEXTS))]
-        )
-        yield store
-        safe_delete(live_client, name)
+        assert "dense" in raw["results"]
+        assert "chunks" in raw["results"]
 
-    def test_filter_eq(self, filter_store):
-        """The $eq operator must restrict results to docs matching the exact value."""
-        results = filter_store.similarity_search(
-            "language", k=5, filter=[{"category": {"$eq": "programming"}}]
-        )
-        assert len(results) > 0
-        for doc in results:
-            assert doc.metadata.get("category") == "programming"
-
-    def test_filter_in(self, filter_store):
-        """The $in operator must restrict results to docs whose value is in the list."""
-        results = filter_store.similarity_search(
-            "technology",
-            k=5,
-            filter=[{"difficulty": {"$in": ["beginner", "advanced"]}}],
-        )
-        assert len(results) > 0
-        for doc in results:
-            assert doc.metadata.get("difficulty") in ["beginner", "advanced"]
-
-    def test_filter_multiple(self, filter_store):
-        """Multiple filter dicts must combine with AND logic on a live server."""
-        results = filter_store.similarity_search(
-            "learning",
-            k=5,
-            filter=[{"category": {"$eq": "ai"}}, {"difficulty": {"$eq": "advanced"}}],
-        )
-        for doc in results:
-            assert doc.metadata.get("category") == "ai"
-            assert doc.metadata.get("difficulty") == "advanced"
-
-    def test_filter_no_match(self, filter_store):
-        """A filter matching no documents must return zero results on a live server."""
-        results = filter_store.similarity_search(
-            "anything", k=5, filter=[{"category": {"$eq": "nonexistent"}}]
-        )
-        assert len(results) == 0
-
-    # ── as_retriever ──────────────────────────────────────────────────────
-
-    def test_retriever(self, vector_store_dense_store):
-        """as_retriever must return a retriever that yields documents via invoke."""
-        store, _ = vector_store_dense_store
-        retriever = store.as_retriever(search_kwargs={"k": 2})
-        docs = retriever.invoke("machine learning")
-        assert len(docs) > 0
-
-    def test_retriever_with_filter(self, vector_store_dense_store):
-        """A retriever built with a filter in search_kwargs must only return matches."""
-        store, _ = vector_store_dense_store
-        retriever = store.as_retriever(
-            search_kwargs={"k": 3, "filter": [{"category": {"$eq": "ai"}}]}
-        )
-        docs = retriever.invoke("learning")
-        for doc in docs:
-            assert doc.metadata.get("category") == "ai"
-
-    # ── Delete (own collections, independent) ────────────────────────────
-
-    def test_delete_by_ids(self, live_client, fake_embedder):
-        """delete(ids=...) on a live collection must remove only the specified ids."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        ids = store.add_texts(texts=TEXTS[:3], metadatas=METADATAS[:3])
-        assert store.delete(ids=[ids[0]]) is True
-        assert store.get_by_ids([ids[0]]) == []
-        assert len(store.get_by_ids(ids[1:])) == 2
-
-    def test_delete_by_filter(self, live_client, fake_embedder):
-        """delete(filter=...) on a live collection must remove all matching entries."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
-        assert store.delete(filter=[{"category": {"$eq": "programming"}}]) is True
-        remaining = store.similarity_search(
-            "programming", k=10, filter=[{"category": {"$eq": "programming"}}]
-        )
-        assert len(remaining) == 0
-
-    def test_delete_no_params_raises(self, live_client, fake_embedder):
-        """delete must raise ValueError when called without ids or filter."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        with pytest.raises(ValueError):
-            store.delete()
-
-    # ── Factory methods ───────────────────────────────────────────────────
-
-    def test_from_texts(self, live_client, fake_embedder):
-        """from_texts against a live server must create a searchable collection."""
-        name = uid()
-        store = EndeeVectorStore.from_texts(
-            texts=TEXTS[:3],
-            embedding=fake_embedder,
-            metadatas=METADATAS[:3],
-            endee_client=live_client,
-            collection_name=name,
-            dimension=DIMENSION,
-            force_recreate=True,
-        )
-        assert len(store.similarity_search("Python", k=2)) > 0
-
-    def test_from_documents(self, live_client, fake_embedder):
-        """from_documents against a live server must create a searchable collection."""
-        name = uid()
-        docs = [
-            Document(page_content=t, metadata=m)
-            for t, m in zip(TEXTS[:3], METADATAS[:3])
-        ]
-        store = EndeeVectorStore.from_documents(
-            documents=docs,
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            dimension=DIMENSION,
-            force_recreate=True,
-        )
-        assert len(store.similarity_search("Rust", k=2)) > 0
-
-    def test_from_existing_collection(self, live_client, fake_embedder):
-        """from_existing_collection must reconnect and allow searching it."""
-        name = uid()
-        EndeeVectorStore.from_texts(
-            texts=TEXTS[:2],
-            embedding=fake_embedder,
-            metadatas=METADATAS[:2],
-            endee_client=live_client,
-            collection_name=name,
-            dimension=DIMENSION,
-            force_recreate=True,
-        )
-        store2 = EndeeVectorStore.from_existing_collection(
-            collection_name=name,
-            embedding=fake_embedder,
-            endee_client=live_client,
-        )
-        assert store2.collection_name == name
-        assert len(store2.similarity_search("Python", k=2)) > 0
-
-    # ── Collection config / force_recreate ───────────────────────────────
-
-    def test_force_recreate(self, live_client, fake_embedder):
-        """force_recreate must wipe existing data when reusing a collection name."""
-        name = uid()
-        store1 = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        store1.add_texts(texts=TEXTS[:2])
-        store2 = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        assert len(store2.similarity_search("Python", k=5)) == 0
-
-    def test_custom_ef_con(self, live_client, fake_embedder):
-        """Custom ef_con and M values passed via fields= must show up in describe()."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[
-                {
-                    "name": "dense",
-                    "type": "vector",
-                    "params": {
-                        "dimension": DIMENSION,
-                        "space_type": "cosine",
-                        "precision": "int8",
-                        "M": 32,
-                        "ef_con": 256,
-                    },
-                }
-            ],
-            force_recreate=True,
-        )
-        info = store.collection.describe()
-        dense = next(f for f in info["fields"] if f["type"] == "vector")
-        assert dense["params"]["ef_con"] == 256
-        assert dense["params"]["M"] == 32
-
-    def test_missing_embedding_raises(self, live_client):
-        """EndeeVectorStore must raise ValueError when embedding is None."""
-        with pytest.raises(ValueError):
-            EndeeVectorStore(embedding=None, collection_name="x", fields=[DENSE_FIELD])
-
-    def test_missing_collection_name_raises(self, live_client, fake_embedder):
-        """EndeeVectorStore must raise ValueError when collection_name is None."""
-        with pytest.raises(ValueError):
-            EndeeVectorStore(
-                embedding=fake_embedder, collection_name=None, fields=[DENSE_FIELD]
-            )
-
-    def test_invalid_params_raise(self, live_client, fake_embedder):
-        """A negative dimension field param must raise EndeeVectorStoreError."""
-        name = uid()
-        with pytest.raises(EndeeVectorStoreError):
-            EndeeVectorStore(
-                embedding=fake_embedder,
-                endee_client=live_client,
-                collection_name=name,
-                fields=[
-                    {
-                        "name": "dense",
-                        "type": "vector",
-                        "params": {
-                            "dimension": -1,
-                            "space_type": "cosine",
-                            "precision": "int8",
-                        },
-                    }
-                ],
-            )
-
-    def test_init_builds_client_from_api_token_and_base_url(
-        self, live_client, fake_embedder
+    def test_multi_field_search_forwards_filter_and_thresholds_live(
+        self, store_factory, fake_embedder
     ):
+        """multi_field_search() must accept filter/prefilter/boost on a real server."""
+        dim = fake_embedder.dim
+        vs = store_factory(dimension=dim, space_type="cosine")
+        text = "Filtered multi field search"
+        vec = fake_embedder(text)
+        node = TextNode(
+            text=text, embedding=vec, id_="mf_filter", metadata={"category": "ai"}
+        )
+        vs.add([node])
+
+        raw = vs.multi_field_search(
+            fields={"dense": {"query": vec, "limit": 3}},
+            filter=[{"category": {"$eq": "ai"}}],
+            prefilter_cardinality_threshold=1000,
+            filter_boost_percentage=20,
+        )
+        assert "dense" in raw["results"]
+
+    def test_clear_deletes_the_collection(self, store_factory, live_client):
+        """clear() must actually delete the collection from the live server."""
+        vs = store_factory(dimension=16, space_type="cosine")
+        name = vs.collection_name
+        vs.clear()
+        names = [
+            c.get("name") if isinstance(c, dict) else c
+            for c in live_client.list_collections()
+        ]
+        assert name not in names
+
+    def test_delete_vector_removes_a_single_object(self, store_factory, fake_embedder):
+        """delete_vector() must remove exactly the object with the given id."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        node = TextNode(
+            text="single object to delete",
+            embedding=fake_embedder("single object to delete"),
+            id_="solo_object",
+        )
+        vs.add([node])
+        vs.delete_vector("solo_object")
+        assert vs.fetch(["solo_object"]) == []
+
+    def test_force_recreate_deletes_existing_data(self, store_factory, fake_embedder):
+        """force_recreate=True on an existing collection must wipe prior data."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        name = vs.collection_name
+        node = TextNode(
+            text="first generation data",
+            embedding=fake_embedder("first generation data"),
+            id_="gen1",
+        )
+        vs.add([node])
+        assert vs.describe()["fields"][0]["element_count"] == 1
+
+        recreated = store_factory(
+            collection_name=name,
+            dimension=fake_embedder.dim,
+            space_type="cosine",
+            force_recreate=True,
+        )
+        assert recreated.describe()["fields"][0]["element_count"] == 0
+
+    def test_endee_collection_override_uses_the_given_collection(
+        self, store_factory, live_client, fake_embedder
+    ):
+        """endee_collection= must skip lookup and use the pre-fetched Collection."""
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        raw_collection = live_client.get_collection(name=vs.collection_name)
+
+        reused = EndeeVectorStore(
+            endee_client=live_client,
+            collection_name=vs.collection_name,
+            endee_collection=raw_collection,
+        )
+        assert reused.describe()["name"] == vs.collection_name
+
+    def test_init_builds_client_from_api_token_and_base_url(self, live_client):
         """A store built from api_token/base_url (not endee_client=) must connect."""
         name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
+        vs = EndeeVectorStore.from_params(
             api_token=os.environ["ENDEE_API_TOKEN"],
             base_url=os.environ.get("ENDEE_BASE_URL"),
-            force_recreate=True,
-        )
-        try:
-            assert store.collection.describe()["name"] == name
-        finally:
-            safe_delete(live_client, name)
-
-    @pytest.mark.parametrize("space_type", ALL_SPACE_TYPES)
-    def test_simple_mode_with_each_space_type(
-        self, live_client, fake_embedder, space_type
-    ):
-        """Simple-mode (dimension=) construction must work with every space_type."""
-        name = uid()
-        store = _new_simple_store(
-            live_client, fake_embedder, name, space_type=space_type
-        )
-        try:
-            store.add_texts(texts=["Rust guarantees memory safety."])
-            results = store.similarity_search("memory safety", k=3)
-            assert len(results) > 0
-        finally:
-            safe_delete(live_client, name)
-
-    def test_validate_collection_config_raises_on_dimension_mismatch(
-        self, live_client, fake_embedder
-    ):
-        """Reconnecting with a different dimension must raise, based on describe()."""
-        name = uid()
-        _new_simple_store(live_client, fake_embedder, name)
-        try:
-            with pytest.raises(EndeeVectorStoreError, match="dimension"):
-                _new_simple_store(
-                    live_client,
-                    fake_embedder,
-                    name,
-                    dimension=DIMENSION + 1,
-                    force_recreate=False,
-                )
-        finally:
-            safe_delete(live_client, name)
-
-    def test_validate_collection_config_does_not_warn_on_default_precision(
-        self, live_client, fake_embedder, caplog
-    ):
-        """Reconnecting with the default (enum) precision must not warn falsely."""
-        name = uid()
-        _new_simple_store(live_client, fake_embedder, name)
-        try:
-            with caplog.at_level("WARNING"):
-                _new_simple_store(
-                    live_client, fake_embedder, name, force_recreate=False
-                )
-            assert "precision" not in caplog.text
-        finally:
-            safe_delete(live_client, name)
-
-    def test_validate_collection_config_does_not_warn_on_matching_string_precision(
-        self, live_client, fake_embedder, caplog
-    ):
-        """Reconnecting with a matching plain-string precision must not warn."""
-        name = uid()
-        _new_simple_store(live_client, fake_embedder, name, precision="int8")
-        try:
-            with caplog.at_level("WARNING"):
-                _new_simple_store(
-                    live_client,
-                    fake_embedder,
-                    name,
-                    precision="int8",
-                    force_recreate=False,
-                )
-            assert "precision" not in caplog.text
-        finally:
-            safe_delete(live_client, name)
-
-    def test_validate_collection_config_warns_on_real_precision_mismatch(
-        self, live_client, fake_embedder, caplog
-    ):
-        """Reconnecting with a genuinely different precision must still warn."""
-        name = uid()
-        _new_simple_store(live_client, fake_embedder, name, precision="int8")
-        try:
-            with caplog.at_level("WARNING"):
-                _new_simple_store(
-                    live_client,
-                    fake_embedder,
-                    name,
-                    precision="float32",
-                    force_recreate=False,
-                )
-            assert "precision" in caplog.text
-        finally:
-            safe_delete(live_client, name)
-
-    def test_validate_collection_config_passes_on_matching_reconnect(
-        self, live_client, fake_embedder
-    ):
-        """Reconnecting with a matching config must not raise."""
-        name = uid()
-        _new_simple_store(live_client, fake_embedder, name, space_type="cosine")
-        try:
-            store = _new_simple_store(
-                live_client,
-                fake_embedder,
-                name,
-                space_type="cosine",
-                force_recreate=False,
-            )
-            assert store.collection is not None
-        finally:
-            safe_delete(live_client, name)
-
-    def test_simple_mode_with_sparse_embedding_enables_hybrid_search(
-        self, live_client, fake_embedder, fake_sparse_embedding
-    ):
-        """Simple-mode (no fields=) construction with sparse_embedding goes hybrid."""
-        name = uid()
-        store = _new_simple_store(
-            live_client,
-            fake_embedder,
-            name,
-            sparse_embedding=fake_sparse_embedding,
-            retrieval_mode=RetrievalMode.HYBRID,
-        )
-        try:
-            field_map = store.field_map
-            sparse_field = field_map[store.sparse_field_name]
-            assert sparse_field["params"]["sparse_model"] == "default"
-
-            store.add_texts(texts=["Kubernetes orchestrates containers."])
-            results = store.similarity_search("Kubernetes containers", k=3)
-            assert len(results) > 0
-        finally:
-            safe_delete(live_client, name)
-
-    def test_custom_payload_keys_round_trip_live(self, live_client, fake_embedder):
-        """Custom content/metadata payload keys must round-trip on a real server."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
             collection_name=name,
-            fields=[DENSE_FIELD],
-            content_payload_key="body",
-            metadata_payload_key="meta",
+            dimension=16,
+            space_type="cosine",
             force_recreate=True,
         )
         try:
-            store.add_texts(
-                texts=["Payload key round trip test."], metadatas=[{"tag": "x"}]
-            )
-            results = store.similarity_search("Payload key round trip", k=1)
-            assert len(results) > 0
-            assert results[0].metadata.get("tag") == "x"
-        finally:
-            safe_delete(live_client, name)
-
-    def test_add_texts_batches_across_multiple_upserts(
-        self, live_client, fake_embedder
-    ):
-        """add_texts with a small batch_size must upsert everything across batches."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        try:
-            texts = [f"batching document number {i}" for i in range(12)]
-            ids = store.add_texts(texts=texts, batch_size=5)
-            assert len(ids) == 12
-            info = store.collection.describe()
-            assert info["total_elements"] == 12
+            assert vs.describe()["name"] == name
         finally:
             safe_delete(live_client, name)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Multi-field integration tests
+# Filters integration tests
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.integration
-class TestMultiFieldIntegration:
+class TestFiltersIntegration:
     # ── Fixture ──────────────────────────────────────────────────────────
 
-    @pytest.fixture(scope="class")
-    def multi_field_store(self, live_client, fake_embedder):
-        """Live title/content/keywords collection, shared by the multi-field tests."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[
-                {
-                    "name": "title",
-                    "type": "vector",
-                    "params": {
-                        "dimension": DIMENSION,
-                        "space_type": "cosine",
-                        "precision": "int8",
-                    },
-                },
-                {
-                    "name": "content",
-                    "type": "vector",
-                    "params": {
-                        "dimension": DIMENSION,
-                        "space_type": "cosine",
-                        "precision": "int8",
-                    },
-                },
-                {"name": "keywords", "type": "sparse", "sparse_model": "default"},
-            ],
-            dense_field_name="title",
-            sparse_field_name="keywords",
-            force_recreate=True,
+    @pytest.fixture
+    def indexed_store(
+        self, store_factory, sample_documents, fake_embedder, fake_embed_model
+    ):
+        """A live-server store pre-populated with sample_documents via fake_embedder."""
+        from llama_index.core import Settings, StorageContext, VectorStoreIndex
+
+        vs = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+
+        Settings.llm = None
+        storage_context = StorageContext.from_defaults(vector_store=vs)
+        VectorStoreIndex.from_documents(
+            sample_documents,
+            storage_context=storage_context,
+            embed_model=fake_embed_model,
         )
-        objects = []
-        for i, (text, meta) in enumerate(zip(TEXTS, METADATAS)):
-            title_vec = fake_embedder.embed_query(text.split()[0])
-            content_vec = fake_embedder.embed_query(text)
-            indices = sorted(set(hash(w) % 500 for w in text.lower().split()[:5]))
-            values = [1.0 / (j + 1) for j in range(len(indices))]
-            objects.append(
-                {
-                    "id": f"mf{i}",
-                    "meta": {"text": text, "metadata": meta},
-                    "filter": meta,
-                    "fields": {
-                        "title": title_vec,
-                        "content": content_vec,
-                        "keywords": {"indices": indices, "values": values},
-                    },
-                }
+
+        yield vs
+
+    def test_single_eq_filter_returns_only_matching_category(
+        self, indexed_store, fake_embedder
+    ):
+        """A single EQ filter must return only nodes matching that category."""
+        ai_filter = MetadataFilter(
+            key="category", value="ai", operator=FilterOperator.EQ
+        )
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("What is machine learning?"),
+            similarity_top_k=5,
+            filters=MetadataFilters(filters=[ai_filter]),
+        )
+        result = indexed_store.query(query)
+        assert len(result.nodes) > 0
+        for node in result.nodes:
+            assert "ai" in str(node.metadata.get("category", "")).lower()
+
+    def test_multiple_eq_filters_returns_only_matching_all(
+        self, indexed_store, fake_embedder
+    ):
+        """Multiple EQ filters combined must return only nodes matching all of them."""
+        category_filter = MetadataFilter(
+            key="category", value="programming", operator=FilterOperator.EQ
+        )
+        difficulty_filter = MetadataFilter(
+            key="difficulty", value="beginner", operator=FilterOperator.EQ
+        )
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder(
+                "What programming language is good for beginners?"
+            ),
+            similarity_top_k=5,
+            filters=MetadataFilters(filters=[category_filter, difficulty_filter]),
+        )
+        result = indexed_store.query(query)
+        assert len(result.nodes) > 0
+        for node in result.nodes:
+            assert "programming" in str(node.metadata.get("category", "")).lower()
+            assert "beginner" in str(node.metadata.get("difficulty", "")).lower()
+
+    def test_in_filter_returns_only_matching_languages(
+        self, indexed_store, fake_embedder
+    ):
+        """An IN filter must return only nodes whose language matches a listed value."""
+        in_filter = MetadataFilter(
+            key="language", value=["python", "javascript"], operator=FilterOperator.IN
+        )
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("What web technologies are discussed?"),
+            similarity_top_k=5,
+            filters=MetadataFilters(filters=[in_filter]),
+        )
+        result = indexed_store.query(query)
+        assert len(result.nodes) > 0
+        for node in result.nodes:
+            assert str(node.metadata.get("language", "")).lower() in (
+                "python",
+                "javascript",
             )
-        ids = store.add_objects(objects)
-        yield store, ids
-        safe_delete(live_client, name)
 
-    def test_add_objects_returns_ids(self, multi_field_store):
-        """add_objects must return ids in the same order the objects were added."""
-        store, ids = multi_field_store
-        assert ids == [f"mf{i}" for i in range(len(TEXTS))]
-
-    def test_field_map(self, multi_field_store):
-        """field_map must contain the title, content, and keywords fields."""
-        store, _ = multi_field_store
-        fm = store.field_map
-        assert "title" in fm
-        assert "content" in fm
-        assert "keywords" in fm
-
-    def test_standard_search_uses_primary_field(self, multi_field_store):
-        """similarity_search must use dense_field_name as the primary search field."""
-        store, _ = multi_field_store
-        results = store.similarity_search("Python", k=3)
-        assert len(results) > 0
-
-    def test_multi_field_search_raw(self, multi_field_store, fake_embedder):
-        """multi_field_search must return raw results keyed by each searched field."""
-        store, _ = multi_field_store
-        raw = store.multi_field_search(
-            fields={
-                "title": {"query": fake_embedder.embed_query("Python"), "limit": 3},
-                "content": {
-                    "query": fake_embedder.embed_query("programming"),
-                    "limit": 3,
-                },
-            }
+    def test_ne_operator_raises_value_error(self, indexed_store, fake_embedder):
+        """Querying with an NE filter against a live index must raise ValueError."""
+        ne_filter = MetadataFilter(
+            key="difficulty", value="beginner", operator=FilterOperator.NE
         )
-        assert "title" in raw["results"]
-        assert "content" in raw["results"]
-
-    def test_multi_field_search_with_rerank(self, multi_field_store, fake_embedder):
-        """multi_field_search_with_rerank returns reranked pairs capped at `limit`."""
-        store, _ = multi_field_store
-        results = store.multi_field_search_with_rerank(
-            fields={
-                "title": {"query": fake_embedder.embed_query("machine"), "limit": 10},
-                "content": {
-                    "query": fake_embedder.embed_query("learning"),
-                    "limit": 10,
-                },
-            },
-            limit=3,
-            field_weights={"title": 0.4, "content": 0.6},
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("What advanced topics are covered?"),
+            similarity_top_k=3,
+            filters=MetadataFilters(filters=[ne_filter]),
         )
-        assert 0 < len(results) <= 3
-        doc, score = results[0]
-        assert isinstance(doc, Document)
-        assert isinstance(score, float)
+        with pytest.raises(ValueError, match="Unsupported filter operator"):
+            indexed_store.query(query)
 
-    def test_multi_field_search_with_filter(self, multi_field_store, fake_embedder):
-        """multi_field_search must apply the filter to every returned hit."""
-        store, _ = multi_field_store
-        raw = store.multi_field_search(
-            fields={
-                "content": {"query": fake_embedder.embed_query("learning"), "limit": 5}
-            },
-            filter=[{"category": {"$eq": "ai"}}],
+    def test_nonexistent_filter_key_returns_empty_not_a_crash(
+        self, indexed_store, fake_embedder
+    ):
+        """Filtering on a metadata key no node has must return empty, not raise."""
+        invalid_filter = MetadataFilter(
+            key="non_existent", value="something", operator=FilterOperator.EQ
         )
-        for hit in raw["results"].get("content", []):
-            assert hit.get("filter", {}).get("category") == "ai"
-
-    def test_get_by_ids(self, multi_field_store):
-        """get_by_ids must return documents for existing multi-field ids."""
-        store, _ = multi_field_store
-        assert len(store.get_by_ids(["mf0", "mf1"])) == 2
-
-    def test_delete_object(self, live_client, fake_embedder):
-        """delete(ids=...) on a multi-field collection must remove only that object."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[
-                {
-                    "name": "vec",
-                    "type": "vector",
-                    "params": {
-                        "dimension": DIMENSION,
-                        "space_type": "cosine",
-                        "precision": "int8",
-                    },
-                }
-            ],
-            dense_field_name="vec",
-            force_recreate=True,
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("What will I get?"),
+            similarity_top_k=2,
+            filters=MetadataFilters(filters=[invalid_filter]),
         )
-        vec = fake_embedder.embed_query("hello")
-        store.add_objects(
-            [
-                {
-                    "id": "x1",
-                    "meta": {"text": "hello"},
-                    "filter": {},
-                    "fields": {"vec": vec},
-                },
-                {
-                    "id": "x2",
-                    "meta": {"text": "world"},
-                    "filter": {},
-                    "fields": {"vec": vec},
-                },
-            ]
-        )
-        store.delete(ids=["x1"])
-        assert store.get_by_ids(["x1"]) == []
-        assert len(store.get_by_ids(["x2"])) == 1
+        result = indexed_store.query(query)  # must not raise
+        assert result.nodes == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -817,241 +580,202 @@ class TestMultiFieldIntegration:
 
 @pytest.mark.integration
 class TestSparseIntegration:
-    # ── Fixture ──────────────────────────────────────────────────────────
+    def test_hybrid_collection_end_to_end(self, store_factory, fake_embedder):
+        """A dense+endee_bm25 hybrid collection must accept add() and return hits."""
+        pytest.importorskip("endee_model")
+        fields = [
+            {
+                "name": "dense",
+                "type": "vector",
+                "params": {
+                    "dimension": fake_embedder.dim,
+                    "space_type": "cosine",
+                    "precision": "int8",
+                },
+            },
+            {"name": "sparse", "type": "sparse", "sparse_model": "endee_bm25"},
+        ]
+        vs = store_factory(fields=fields)
+        assert vs.hybrid is True
 
-    @pytest.fixture(scope="class")
-    def hybrid_store(self, live_client, fake_embedder, fake_sparse_embedding):
-        """Own live hybrid (dense + sparse) collection, shared across the class."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "default"},
-            ],
-            retrieval_mode=RetrievalMode.HYBRID,
-            sparse_embedding=fake_sparse_embedding,
-            force_recreate=True,
+        text = "Vector databases optimize similarity search."
+        node = TextNode(text=text, embedding=fake_embedder(text), id_="hybrid1")
+        vs.add([node])
+
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("similarity search"),
+            query_str="similarity search",
+            similarity_top_k=3,
         )
-        ids = store.add_texts(texts=TEXTS, metadatas=METADATAS)
-        yield store, ids
-        safe_delete(live_client, name)
+        result = vs.query(query)
+        assert isinstance(result.nodes, list)
 
-    def test_hybrid_search(self, hybrid_store):
-        """similarity_search on a hybrid store must fuse dense and sparse results."""
-        store, _ = hybrid_store
-        results = store.similarity_search("neural networks", k=3)
-        assert len(results) > 0
-
-    def test_hybrid_search_with_score(self, hybrid_store):
-        """similarity_search_with_score on a hybrid store must return score pairs."""
-        store, _ = hybrid_store
-        results = store.similarity_search_with_score("vector embeddings", k=3)
-        assert len(results) > 0
-        _, score = results[0]
-        assert isinstance(score, float)
-
-    def test_hybrid_search_with_filter(self, hybrid_store):
-        """similarity_search on a hybrid collection must respect the given filter."""
-        store, _ = hybrid_store
-        results = store.similarity_search(
-            "learning", k=5, filter=[{"category": {"$eq": "ai"}}]
-        )
-        for doc in results:
-            assert doc.metadata.get("category") == "ai"
-
-    def test_hybrid_search_by_object(
-        self, hybrid_store, fake_embedder, fake_sparse_embedding
+    def test_default_sparse_model_hybrid_search_fuses_results(
+        self, store_factory, fake_embedder
     ):
-        """Must return results given explicit dense and sparse vectors."""
-        store, _ = hybrid_store
-        dense_vec = fake_embedder.embed_query("deep learning")
-        sparse_vec = fake_sparse_embedding.embed_query("deep learning")
-        results = store.similarity_search_by_object_with_score(
-            embedding=dense_vec,
-            k=3,
-            sparse_indices=sparse_vec.indices,
-            sparse_values=sparse_vec.values,
+        """A custom (non-bm25) sparse_embedding must drive real RRF fusion live."""
+        fields = [
+            {
+                "name": "dense",
+                "type": "vector",
+                "params": {
+                    "dimension": fake_embedder.dim,
+                    "space_type": "cosine",
+                    "precision": "int8",
+                },
+            },
+            {"name": "sparse", "type": "sparse", "sparse_model": "default"},
+        ]
+        vs = store_factory(
+            fields=fields, sparse_embedding=_DeterministicSparseEmbedding()
         )
-        assert len(results) > 0
+        assert vs.hybrid is True
 
-    def test_hybrid_rrf_tuning(self, hybrid_store):
-        """similarity_search_with_score must accept custom RRF tuning params."""
-        store, _ = hybrid_store
-        results = store.similarity_search_with_score(
-            "Python programming",
-            k=3,
-            rrf_rank_constant=60,
-            dense_rrf_weight=0.7,
+        text = "Kubernetes orchestrates containers at scale."
+        node = TextNode(text=text, embedding=fake_embedder(text), id_="hybrid_default")
+        vs.add([node])
+
+        query = VectorStoreQuery(
+            query_embedding=fake_embedder("container orchestration"),
+            query_str="Kubernetes orchestrates containers at scale.",
+            similarity_top_k=3,
         )
-        assert len(results) > 0
-
-    def test_hybrid_retriever(self, hybrid_store):
-        """as_retriever on a hybrid store must return a retriever usable via invoke."""
-        store, _ = hybrid_store
-        retriever = store.as_retriever(search_kwargs={"k": 2})
-        docs = retriever.invoke("similarity search")
-        assert len(docs) > 0
-
-    def test_hybrid_get_by_ids(self, hybrid_store):
-        """get_by_ids must return the document for an id from a hybrid collection."""
-        store, ids = hybrid_store
-        docs = store.get_by_ids([ids[0]])
-        assert len(docs) == 1
-
-    def test_hybrid_properties(self, hybrid_store):
-        """A hybrid store reports mode HYBRID with non-None sparse_embeddings."""
-        store, _ = hybrid_store
-        assert store.retrieval_mode == RetrievalMode.HYBRID
-        assert store.sparse_embeddings is not None
-
-    def test_endee_bm25_auto_detect(self, live_client, fake_embedder):
-        """A live endee_bm25 sparse field must auto-detect HYBRID mode and search."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "endee_bm25"},
-            ],
-            force_recreate=True,
-        )
-        assert store.retrieval_mode == RetrievalMode.HYBRID
-        assert store.sparse_embeddings is not None
-
-        store.add_texts(texts=TEXTS[:3], metadatas=METADATAS[:3])
-        results = store.similarity_search("Python", k=2)
-        assert len(results) > 0
-
-    def test_raw_sparse_model_auto_wrap(self, live_client, fake_embedder):
-        """A raw sparse model in a live store must auto-wrap and stay searchable."""
-        name = uid()
-        raw_model = FakeRawSparseModel()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "default"},
-            ],
-            retrieval_mode=RetrievalMode.HYBRID,
-            sparse_embedding=raw_model,
-            force_recreate=True,
-        )
-        assert store.sparse_embeddings is not None
-
-        store.add_texts(texts=TEXTS[:3], metadatas=METADATAS[:3])
-        results = store.similarity_search("Python", k=2)
-        assert len(results) > 0
-
-    def test_from_existing_endee_bm25_auto_reconnect(self, live_client, fake_embedder):
-        """Reconnecting to a live endee_bm25 collection must auto-detect HYBRID mode."""
-        name = uid()
-        store1 = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "endee_bm25"},
-            ],
-            force_recreate=True,
-        )
-        store1.add_texts(texts=TEXTS[:3], metadatas=METADATAS[:3])
-
-        store2 = EndeeVectorStore.from_existing_collection(
-            collection_name=name,
-            embedding=fake_embedder,
-            endee_client=live_client,
-        )
-        assert store2.retrieval_mode == RetrievalMode.HYBRID
-        results = store2.similarity_search("Python", k=2)
-        assert len(results) > 0
+        result = vs.query(query, dense_rrf_weight=0.5, rrf_rank_constant=60)
+        assert "hybrid_default" in result.ids
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Multi-vector field integration tests
+# Retrieval integration tests (exercises real LlamaIndex framework objects)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.integration
-class TestMultiVectorIntegration:
+class TestRetrieval:
     # ── Fixture ──────────────────────────────────────────────────────────
 
-    @pytest.fixture(scope="class")
-    def multi_vector_store(self, live_client, fake_embedder):
-        """Own live dense + multi_vector collection, shared across the class."""
-        name = uid()
-        fields_def = [
-            DENSE_FIELD,
-            {
-                "name": "chunks",
-                "type": "multi_vector",
-                "params": {
-                    "dimension": DIMENSION,
-                    "space_type": "cosine",
-                    "precision": "float16",
-                    "pooling": "mean",
-                },
-            },
-        ]
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            endee_client=live_client,
-            collection_name=name,
-            fields=fields_def,
-            force_recreate=True,
-        )
-        objects = [
-            {
-                "id": f"mv{i}",
-                "meta": {"text": text},
-                "filter": meta,
-                "fields": {
-                    "dense": fake_embedder.embed_query(text),
-                    "chunks": [
-                        fake_embedder.embed_query(word) for word in text.split()[:3]
-                    ],
-                },
-            }
-            for i, (text, meta) in enumerate(zip(TEXTS, METADATAS))
-        ]
-        ids = store.add_objects(objects)
-        yield store, ids
-        safe_delete(live_client, name)
-
-    def test_add_objects_and_multi_field_search_round_trip(
-        self, multi_vector_store, fake_embedder
+    @pytest.fixture
+    def retrieval_index(
+        self, store_factory, sample_documents, fake_embedder, fake_embed_model
     ):
-        """multi_field_search on a multi_vector field must return per-field results."""
-        store, ids = multi_vector_store
-        raw = store.multi_field_search(
-            fields={
-                "dense": {
-                    "query": fake_embedder.embed_query("programming"),
-                    "limit": 5,
-                },
-                "chunks": {
-                    "query": [
-                        fake_embedder.embed_query("python"),
-                        fake_embedder.embed_query("language"),
-                    ],
-                    "limit": 5,
-                },
-            }
-        )
-        assert "dense" in raw["results"]
-        assert "chunks" in raw["results"]
-        assert len(raw["results"]["dense"]) > 0
-        assert any(hit["id"] in ids for hit in raw["results"]["dense"])
+        """A live-server VectorStoreIndex over sample_documents, for retrieval tests."""
+        vector_store = store_factory(dimension=fake_embedder.dim, space_type="cosine")
+        storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    def test_field_map_reports_multi_vector_field(self, multi_vector_store):
-        """field_map must expose the chunks field with type 'multi_vector'."""
-        store, _ = multi_vector_store
-        fm = store.field_map
-        assert fm["chunks"]["type"] == "multi_vector"
+        # Disable LLM to focus on vector store testing.
+        Settings.llm = None
+
+        index = VectorStoreIndex.from_documents(
+            sample_documents,
+            storage_context=storage_context,
+            embed_model=fake_embed_model,
+        )
+
+        yield vector_store, index, fake_embed_model
+
+    def test_custom_retriever_with_metadata_filter(self, retrieval_index):
+        """A filtered VectorIndexRetriever must return matching, scored nodes only."""
+        _vector_store, index, embed_model = retrieval_index
+        ai_filter = MetadataFilter(
+            key="category", value="ai", operator=FilterOperator.EQ
+        )
+        retriever = VectorIndexRetriever(
+            index=index,
+            similarity_top_k=3,
+            filters=MetadataFilters(filters=[ai_filter]),
+        )
+
+        nodes = retriever.retrieve("What is deep learning?")
+
+        assert len(nodes) > 0
+        assert len(nodes) <= 3
+        for node in nodes:
+            assert node.score is not None
+            assert "ai" in str(node.node.metadata.get("category", "")).lower()
+            assert node.node.text
+
+    def test_custom_query_engine_with_metadata_filter(self, retrieval_index):
+        """A query engine on a filtered retriever returns only matching source nodes."""
+        _vector_store, index, embed_model = retrieval_index
+        ai_filter = MetadataFilter(
+            key="category", value="ai", operator=FilterOperator.EQ
+        )
+        retriever = VectorIndexRetriever(
+            index=index,
+            similarity_top_k=3,
+            filters=MetadataFilters(filters=[ai_filter]),
+        )
+        query_engine = RetrieverQueryEngine.from_args(retriever=retriever, verbose=True)
+
+        response = query_engine.query(
+            "Explain the difference between machine learning and deep learning"
+        )
+
+        assert hasattr(response, "response")
+        source_nodes = response.source_nodes
+        assert len(source_nodes) > 0
+        for node in source_nodes:
+            assert "ai" in str(node.metadata.get("category", "")).lower()
+
+    def test_direct_vectorstore_query_with_filter(self, retrieval_index):
+        """A direct filtered VectorStoreQuery must return matching nodes with scores."""
+        vector_store, _index, embed_model = retrieval_index
+        db_filter = MetadataFilter(
+            key="category", value="database", operator=FilterOperator.EQ
+        )
+        query = VectorStoreQuery(
+            query_embedding=embed_model.get_text_embedding(
+                "What are vector databases?"
+            ),
+            similarity_top_k=2,
+            filters=MetadataFilters(filters=[db_filter]),
+        )
+
+        result = vector_store.query(query)
+
+        assert len(result.nodes) > 0
+        assert len(result.nodes) <= 2
+        assert len(result.nodes) == len(result.similarities)
+        for node, score in zip(result.nodes, result.similarities):
+            assert "database" in str(node.metadata.get("category", "")).lower()
+            assert isinstance(score, (int, float))
+
+    # ── query.query_str back-compat ─────────────────────────────────────────
+
+    def test_query_with_query_str_is_accepted(self, retrieval_index):
+        """VectorStoreQuery must accept query_str alongside query_embedding."""
+        vector_store, _index, embed_model = retrieval_index
+        query_text = "Python programming language"
+        query = VectorStoreQuery(
+            query_embedding=embed_model.get_text_embedding(query_text),
+            query_str=query_text,
+            similarity_top_k=3,
+        )
+        assert query.query_str == query_text
+
+        result = vector_store.query(query)
+        assert len(result.nodes) > 0
+
+    def test_query_without_query_str_still_works(self, retrieval_index):
+        """query() must still work when query_str is omitted."""
+        vector_store, _index, embed_model = retrieval_index
+        query = VectorStoreQuery(
+            query_embedding=embed_model.get_text_embedding("test query"),
+            similarity_top_k=3,
+        )
+        assert query.query_str is None
+
+        result = vector_store.query(query)
+        assert len(result.nodes) > 0
+
+    def test_query_str_attribute_access_is_safe_via_getattr(self, retrieval_index):
+        """getattr(query, 'query_str', None) must be safe whether or not it was set."""
+        _vector_store, _index, embed_model = retrieval_index
+        emb = embed_model.get_text_embedding("test")
+
+        query_with_str = VectorStoreQuery(
+            query_embedding=emb, query_str="test text", similarity_top_k=1
+        )
+        assert getattr(query_with_str, "query_str", None) == "test text"
+
+        query_without_str = VectorStoreQuery(query_embedding=emb, similarity_top_k=1)
+        assert getattr(query_without_str, "query_str", None) is None

@@ -1,11 +1,11 @@
-name: LangChain Unit Tests
+name: LlamaIndex Unit Tests
 
 # on: [push, pull_request]
 on: workflow_dispatch
 
 jobs:
   unit-test:
-    name: LangChain Unit Tests
+    name: LlamaIndex Unit Tests
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -23,7 +23,7 @@ jobs:
         run: pip install -e .
 
       - name: Install test dependencies
-        run: pip install pytest pytest-mock pytest-timeout pytest-asyncio
+        run: pip install pytest pytest-mock pytest-timeout
 
       - name: Run unit tests
         run: pytest -m unit -v --timeout=60 --tb=short -p no:warnings --junit-xml=test-results.xml

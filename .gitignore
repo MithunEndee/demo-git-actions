@@ -2,8 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
-*.pyc
-*.pyo
 
 # C extensions
 *.so
@@ -22,6 +20,7 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
@@ -31,6 +30,10 @@ MANIFEST
 # PyInstaller
 *.manifest
 *.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
 
 # Unit test / coverage reports
 htmlcov/
@@ -42,88 +45,74 @@ htmlcov/
 nosetests.xml
 coverage.xml
 *.cover
-*.log
-.pytest_cache/
+*.py,cover
 .hypothesis/
+.pytest_cache/
 
-# Virtual environments
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-.venv/
-env/
+# Translations
+*.mo
+*.pot
 
-# IDEs
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-.project
-.pydevproject
-.settings/
-*.sublime-project
-*.sublime-workspace
-examples/
-my_documents/
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
 
-# OS files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-desktop.ini
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*.ipynb
-
-# Markdown docs (generated tutorials etc.)
-
 
 # IPython
 profile_default/
 ipython_config.py
 
-# Environment variables
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
 .env
-.env.local
-.env.*.local
-*.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
-# Secrets and credentials
-secrets/
-credentials/
-*.key
-*.pem
-*.crt
-*.cer
-*.p12
-*.pfx
+# Spyder project settings
+.spyderproject
+.spyproject
 
-# FastEmbed / Model cache
-.fastembed_cache/
-models/
-*.onnx
-*.bin
+# Rope project settings
+.ropeproject
 
-# LangChain / Vector DB
-.chroma/
-*.db
-*.sqlite
-*.sqlite3
-chroma.db
-
-# Documentation builds
-docs/_build/
-docs/.doctrees/
-site/
-.mkdocs/
+# mkdocs documentation
+/site
 
 # mypy
 .mypy_cache/
@@ -133,48 +122,53 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# Temporary files
-*.tmp
-*.temp
-*.bak
+# IDEs
+.vscode/
+.idea/
 *.swp
 *.swo
 *~
+.DS_Store
 
-# Logs
-*.log
-logs/
-log/
+# Project specific
+*.pyc
+*.pyo
+*.pyd
+*.ipynb_checkpoints
 
-# Data files (uncomment if you don't want to track data)
-# *.csv
-# *.json
-# *.pkl
-# *.pickle
-# data/
+# Wheel / dist archives (vendored wheels should not be committed)
+*.whl
+*.tar.gz
+dist/
 
-# Test outputs
-test_output/
-test_results/
-test-results/
+# UV package manager
+uv.lock
+.uv/
 
-# Local development
-.local/
-local/
-scratch/
-playground/
+# Jupyter Notebooks
+*.ipynb
+.ipynb_checkpoints/
 
-# Package manager
-poetry.lock
-Pipfile.lock
-pdm.lock
-
-# Ruff
+# Ruff cache
 .ruff_cache/
 
+# pytest
+.pytest_cache/
+htmlcov/
+
+# Claude Code
+.claude/
+
+# Python type checking
+.pyright/
+pyrightconfig.json
+
+# Editor backup files
+*.bak
+*.tmp
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

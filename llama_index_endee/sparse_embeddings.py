@@ -5,43 +5,16 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from endee._pydantic_compat import PYDANTIC_V2, ConfigDict
-from langchain_core.runnables.config import run_in_executor
 from pydantic import BaseModel, Field
 
-# ---------------------------------------------------------------------------
-# SparseVector — pydantic v1/v2 compatible
-# ---------------------------------------------------------------------------
 
-if PYDANTIC_V2:
+class SparseVector(BaseModel):
+    """Sparse vector with non-zero indices and their values."""
 
-    class SparseVector(BaseModel):
-        """Sparse vector with non-zero indices and their values."""
-
-        model_config = ConfigDict(extra="forbid")
-
-        indices: list[int] = Field(..., description="indices must be unique")
-        values: list[float] = Field(
-            ..., description="values and indices must be the same length"
-        )
-
-else:
-
-    class SparseVector(BaseModel):  # type: ignore[no-redef]
-        """Sparse vector with non-zero indices and their values."""
-
-        class Config:
-            extra = "forbid"
-
-        indices: list[int] = Field(..., description="indices must be unique")
-        values: list[float] = Field(
-            ..., description="values and indices must be the same length"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Abstract base
-# ---------------------------------------------------------------------------
+    indices: list[int] = Field(..., description="indices must be unique")
+    values: list[float] = Field(
+        ..., description="values and indices must be the same length"
+    )
 
 
 class SparseEmbeddings(ABC):
@@ -55,33 +28,17 @@ class SparseEmbeddings(ABC):
     def embed_query(self, text: str) -> SparseVector:
         """Embed a single query as a sparse vector."""
 
-    async def aembed_documents(self, texts: list[str]) -> list[SparseVector]:
-        """Async version of ``embed_documents``."""
-        return await run_in_executor(None, self.embed_documents, texts)
-
-    async def aembed_query(self, text: str) -> SparseVector:
-        """Async version of ``embed_query``."""
-        return await run_in_executor(None, self.embed_query, text)
-
-
-# ---------------------------------------------------------------------------
-# SparseModelAdapter — auto-wraps any model with .embed() / .query_embed()
-# ---------------------------------------------------------------------------
-
 
 class SparseModelAdapter(SparseEmbeddings):
-    """Wraps any sparse model that has ``.embed()`` and ``.query_embed()``
+    """Wraps any sparse model with ``.embed()`` and ``.query_embed()``
     into the ``SparseEmbeddings`` interface.
-
-    This lets you pass a raw model (e.g. ``fastembed.SparseTextEmbedding``)
-    directly as ``sparse_embedding=`` without writing a wrapper class.
 
     Example::
 
         from fastembed import SparseTextEmbedding
         model = SparseTextEmbedding(model_name="prithivida/Splade_PP_en_v1")
 
-        store = EndeeVectorStore(
+        store = EndeeVectorStore.from_params(
             ...,
             sparse_embedding=model,   # auto-wrapped internally
         )
@@ -116,17 +73,12 @@ def wrap_sparse_model(model: Any) -> SparseEmbeddings:
     raise TypeError(msg)
 
 
-# ---------------------------------------------------------------------------
-# EndeeModelSparse — native BM25 via endee_model (recommended)
-# ---------------------------------------------------------------------------
-
-
 class EndeeModelSparse(SparseEmbeddings):
     """Sparse embeddings using endee_model's native BM25.
 
     Computes BM25 term-frequency weights on the client. The Endee server
     applies IDF weighting when ``sparse_model="endee_bm25"`` is set on the
-    index (done automatically by ``EndeeVectorStore``).
+    collection field.
 
     Args:
         model_name: Model identifier. Default: ``"endee/bm25"``.

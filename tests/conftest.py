@@ -1,37 +1,58 @@
-"""Shared pytest fixtures for the endee-langchain test suite.
+"""Shared pytest fixtures for the endee-llamaindex test suite.
 
 Provides:
 - `MockEndee`/`MockEndeeCollection`: a mock backend (unit tests).
-- `mock_endee_client`: patches `langchain_endee.vectorstores.EndeeClient`
-  with a factory that returns a fresh `MockEndee()` per test.
-- `fake_embedder`: a deterministic hash-based dense `Embeddings`, with no
-  ML model.
-- `fake_sparse_embedding`/`fake_raw_sparse_model`: deterministic sparse
-  embedding fakes.
-- `live_client`: a real `endee.Endee` client that skips if
-  `ENDEE_API_TOKEN` is unset (integration tests).
+- `mock_endee_client`: patches `llama_index_endee.base.Endee` with a
+  factory that returns a fresh `MockEndee()` per test.
+- `fake_embedder`/`fake_embed_model`: a deterministic, dependency-free
+  embedding callable and its `BaseEmbedding` wrapper.
+- `live_client`/`store_factory`: a real `endee.Endee` client and a factory
+  for live `EndeeVectorStore` instances, skipping if `ENDEE_API_TOKEN` is
+  unset (integration tests).
+- `sample_documents`: a shared set of `Document` objects with rich
+  metadata, used by filter tests.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import uuid
+from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import numpy as np
 import pytest
 from endee.exceptions import NotFoundException
-from langchain_core.embeddings import Embeddings
+from llama_index.core import Document
+from llama_index.core.base.embeddings.base import BaseEmbedding
+from llama_index.core.bridge.pydantic import PrivateAttr
 
-from langchain_endee.sparse_embeddings import SparseEmbeddings, SparseVector
+
+def _load_dotenv():
+    try:
+        from dotenv import load_dotenv
+
+        root = Path(__file__).resolve().parents[1]  # project root
+        load_dotenv(root / ".env")
+    except ImportError:
+        pass  # python-dotenv not installed
+
+
+_load_dotenv()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Integration-test helpers (shared collection naming + cleanup)
+# Integration test helpers (collection naming + cleanup)
 # ═══════════════════════════════════════════════════════════════════════════
 
-
-_UID_PREFIX = "langchain_test"
+_UID_PREFIX = "llamaindex_test"
 _STALE_PATTERN = re.compile(rf"^{_UID_PREFIX}_[0-9a-f]{{10}}$")
+
+ALL_PRECISIONS = ["float32", "float16", "int8", "int16"]
+ALL_SPACE_TYPES = ["cosine", "l2", "ip"]
 
 
 def uid(prefix: str = _UID_PREFIX) -> str:
@@ -40,16 +61,11 @@ def uid(prefix: str = _UID_PREFIX) -> str:
 
 
 def safe_delete(client, name: str) -> None:
-    """Delete a collection silently, for use in fixture teardown."""
+    """Delete a collection silently - used in fixture teardown."""
     try:
         client.delete_collection(name)
     except Exception:
         pass
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Mock Endee backend (unit tests)
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 class MockEndeeCollection:
@@ -102,8 +118,8 @@ class MockEndeeCollection:
             limit = field_query.get("limit", 10)
 
             if isinstance(query_data, dict) and "indices" in query_data:
-                # This fake has no BM25 scoring, so sparse fields always
-                # return no hits; assert on call args instead of results.
+                # No BM25/sparse scoring here: always no hits for a sparse
+                # field. Assert on call args instead for ranking behavior.
                 per_field_results[field_name] = []
                 continue
 
@@ -153,11 +169,11 @@ class MockEndeeCollection:
     def get_objects(self, ids):
         return [self._store[vid] for vid in ids if vid in self._store]
 
-    def delete_by_filter(self, filter):  # noqa: A002
+    def delete_by_filter(self, filter_list):
         to_delete = [
             vid
             for vid, entry in self._store.items()
-            if self._matches_filter(entry, filter)
+            if self._matches_filter(entry, filter_list)
         ]
         for vid in to_delete:
             del self._store[vid]
@@ -204,142 +220,66 @@ class MockEndee:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Shared collection field and document data, used by unit and integration tests
-# ═══════════════════════════════════════════════════════════════════════════
-
-DIMENSION = 16
-
-ALL_PRECISIONS = ["float32", "float16", "int16", "int8", "binary"]
-ALL_SPACE_TYPES = ["cosine", "l2", "ip"]
-
-DENSE_FIELD = {
-    "name": "dense",
-    "type": "vector",
-    "params": {"dimension": DIMENSION, "space_type": "cosine", "precision": "int8"},
-}
-
-TEXTS = [
-    "Python is a high-level programming language.",
-    "Rust is a systems language focused on safety.",
-    "Machine learning enables systems to learn from data.",
-    "Deep learning uses neural networks with multiple layers.",
-    "Vector databases store embeddings for similarity search.",
-]
-
-METADATAS = [
-    {"category": "programming", "language": "python", "difficulty": "beginner"},
-    {"category": "programming", "language": "rust", "difficulty": "advanced"},
-    {"category": "ai", "field": "ml", "difficulty": "intermediate"},
-    {"category": "ai", "field": "dl", "difficulty": "advanced"},
-    {"category": "database", "type": "vector", "difficulty": "intermediate"},
-]
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Deterministic fake embedders (no ML model download)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class FakeEmbeddings(Embeddings):
-    """Deterministic hash-based embeddings, no ML model download."""
-
-    def __init__(self, dimension: int = DIMENSION):
-        self.dimension = dimension
-
-    def embed_documents(self, texts):
-        return [
-            [(hash(t) + i) % 100 / 100.0 for i in range(self.dimension)] for t in texts
-        ]
-
-    def embed_query(self, text):
-        return self.embed_documents([text])[0]
-
-
-class FakeSparseEmbeddings(SparseEmbeddings):
-    """Deterministic sparse embeddings, no ML model download."""
-
-    def embed_documents(self, texts):
-        vecs = []
-        for t in texts:
-            indices = sorted(set(hash(w) % 1000 for w in t.split()[:10]))
-            values = [1.0 / (i + 1) for i in range(len(indices))]
-            vecs.append(SparseVector(indices=indices, values=values))
-        return vecs
-
-    def embed_query(self, text):
-        return self.embed_documents([text])[0]
-
-
-class _TolistArray(list):
-    """A list that also exposes .tolist(), like fastembed/endee_model's outputs."""
-
-    def tolist(self):
-        return list(self)
-
-
-def make_fake_sparse_result(indices, values):
-    """Build an object exposing `.indices.tolist()` / `.values.tolist()`."""
-
-    class _Result:
-        def __init__(self):
-            self.indices = _TolistArray(indices)
-            self.values = _TolistArray(values)
-
-    return _Result()
-
-
-class FakeRawSparseModel:
-    """Fastembed-style fake (.embed/.query_embed), not a SparseEmbeddings subclass."""
-
-    def embed(self, texts):
-        for t in texts:
-            indices = sorted(set(hash(w) % 1000 for w in t.split()[:10]))
-            values = [1.0 / (i + 1) for i in range(len(indices))]
-            yield make_fake_sparse_result(indices, values)
-
-    def query_embed(self, text):
-        yield from self.embed([text])
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # Fixtures
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 @pytest.fixture
-def mock_endee_client(monkeypatch):
-    """Patch EndeeClient with a factory returning a fresh MockEndee() per test."""
-    # Stores built within the same test share this instance; other tests get
-    # an isolated one.
-    instance = MockEndee()
-    monkeypatch.setattr(
-        "langchain_endee.vectorstores.EndeeClient",
-        lambda *args, **kwargs: instance,
-    )
-    return instance
-
-
-@pytest.fixture(scope="session")
-def fake_embedder():
-    """Session-scoped since it's stateless and integration fixtures need this scope."""
-    return FakeEmbeddings()
-
-
-@pytest.fixture(scope="session")
-def fake_sparse_embedding():
-    """Session-scoped for the same reason as fake_embedder above."""
-    return FakeSparseEmbeddings()
+def mock_endee_client():
+    """Patch llama_index_endee.base.Endee with a fresh MockEndee per test."""
+    fake = MockEndee()
+    with patch("llama_index_endee.base.Endee", side_effect=lambda *a, **kw: fake):
+        yield fake
 
 
 @pytest.fixture
-def fake_raw_sparse_model():
-    return FakeRawSparseModel()
+def fake_embedder():
+    """Deterministic hash-based embedding function, dimension 16, no ML download."""
+    dim = 16
+
+    def _embed(text: str) -> list[float]:
+        digest = hashlib.sha256(text.encode("utf-8")).digest()
+        return [(digest[i % len(digest)] / 255.0) * 2.0 - 1.0 for i in range(dim)]
+
+    _embed.dim = dim
+    return _embed
+
+
+class FakeEmbedModel(BaseEmbedding):
+    """Wraps the fake_embedder callable in a real BaseEmbedding subclass."""
+
+    # VectorStoreIndex.from_documents() calls resolve_embed_model(), which
+    # does a strict isinstance(embed_model, BaseEmbedding) check, so a
+    # duck-typed object with the right method names is not enough here.
+
+    _embed_fn: Any = PrivateAttr()
+
+    def __init__(self, embed_fn, **kwargs):
+        super().__init__(**kwargs)
+        self._embed_fn = embed_fn
+
+    def _get_text_embedding(self, text):
+        return self._embed_fn(text)
+
+    def _get_query_embedding(self, query):
+        return self._embed_fn(query)
+
+    async def _aget_text_embedding(self, text):
+        return self._embed_fn(text)
+
+    async def _aget_query_embedding(self, query):
+        return self._embed_fn(query)
+
+
+@pytest.fixture
+def fake_embed_model(fake_embedder):
+    """Real BaseEmbedding subclass wrapping fake_embedder, for direct index use."""
+    return FakeEmbedModel(fake_embedder)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _cleanup_stale_collections():
-    """Removes leftover collections from a prior interrupted test run."""
-    # No-op if no token is set, since unit tests must still run without a live server.
+    """Removes leftover collections from an interrupted run; no-op without a token."""
     token = os.environ.get("ENDEE_API_TOKEN", "")
     if not token:
         yield
@@ -356,28 +296,153 @@ def _cleanup_stale_collections():
             if name and _STALE_PATTERN.match(name):
                 safe_delete(client, name)
     except Exception:
-        pass  # server unreachable; integration tests will skip anyway via live_client
+        pass
     yield
 
 
 @pytest.fixture(scope="session")
 def live_client():
-    """Real endee.Endee client; skips if ENDEE_API_TOKEN is unset."""
+    """Real endee.Endee client fixture; skips if no valid token is set."""
+    from endee import Endee
+
     token = os.environ.get("ENDEE_API_TOKEN", "")
     if not token:
         pytest.skip("ENDEE_API_TOKEN not set; skipping integration test")
 
-    from endee import Endee
-
-    base_url = os.environ.get("ENDEE_BASE_URL")
     client = Endee(token=token)
+    base_url = os.environ.get("ENDEE_BASE_URL")
     if base_url:
         client.set_base_url(base_url)
 
-    yield client
+    try:
+        client.list_collections()
+    except Exception as e:
+        pytest.skip(
+            f"ENDEE_API_TOKEN is invalid or expired, or service is "
+            f"unreachable: {e}. Update it to run integration tests."
+        )
 
-    # Safety net for tests that build a collection without a cleanup fixture.
-    for coll in client.list_collections():
-        name = coll.get("name") if isinstance(coll, dict) else coll
-        if name and _STALE_PATTERN.match(name):
-            safe_delete(client, name)
+    return client
+
+
+@pytest.fixture
+def store_factory(live_client):
+    """Creates live-server EndeeVectorStore instances, tracking names for cleanup."""
+    from llama_index_endee.base import EndeeVectorStore
+
+    created = []
+
+    def _make(**kwargs):
+        name = kwargs.pop("collection_name", uid())
+        created.append(name)
+        return EndeeVectorStore.from_params(
+            endee_client=live_client, collection_name=name, **kwargs
+        )
+
+    yield _make
+
+    for name in created:
+        safe_delete(live_client, name)
+
+
+@pytest.fixture
+def sample_documents():
+    """Rich category/language/difficulty metadata Document objects."""
+    return [
+        Document(
+            text=(
+                "Python is a high-level, interpreted programming language "
+                "known for its readability and simplicity."
+            ),
+            metadata={
+                "category": "programming",
+                "language": "python",
+                "difficulty": "beginner",
+            },
+        ),
+        Document(
+            text=(
+                "JavaScript is a versatile language for web development "
+                "with advanced features like async/await."
+            ),
+            metadata={
+                "category": "programming",
+                "language": "javascript",
+                "difficulty": "intermediate",
+            },
+        ),
+        Document(
+            text=(
+                "Rust provides memory safety without garbage collection "
+                "using ownership system."
+            ),
+            metadata={
+                "category": "programming",
+                "language": "rust",
+                "difficulty": "advanced",
+            },
+        ),
+        Document(
+            text=(
+                "Machine learning algorithms learn patterns from data "
+                "to make predictions."
+            ),
+            metadata={
+                "category": "ai",
+                "field": "machine_learning",
+                "difficulty": "intermediate",
+            },
+        ),
+        Document(
+            text=(
+                "Deep learning uses neural networks with multiple layers "
+                "for complex pattern recognition."
+            ),
+            metadata={
+                "category": "ai",
+                "field": "deep_learning",
+                "difficulty": "advanced",
+            },
+        ),
+        Document(
+            text=(
+                "Vector databases optimize similarity search for high-dimensional data."
+            ),
+            metadata={
+                "category": "database",
+                "type": "vector",
+                "feature": "similarity_search",
+            },
+        ),
+        Document(
+            text=(
+                "Time-series databases are optimized for sequential "
+                "temporal data storage."
+            ),
+            metadata={
+                "category": "database",
+                "type": "time_series",
+                "feature": "temporal_storage",
+            },
+        ),
+        # category stays a string: the server rejects list-valued filter fields.
+        # languages/technologies are safe as lists since they're not filterable.
+        Document(
+            text="Building a real-time ML pipeline with Python and Vector DB.",
+            metadata={
+                "category": "programming",
+                "languages": ["python"],
+                "technologies": ["ml", "vector_db"],
+                "difficulty": "advanced",
+            },
+        ),
+        Document(
+            text="Implementing secure encryption in distributed databases.",
+            metadata={
+                "category": "database",
+                "field": "cryptography",
+                "difficulty": "advanced",
+                "feature": "encryption",
+            },
+        ),
+    ]

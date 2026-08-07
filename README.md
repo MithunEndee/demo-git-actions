@@ -1,10 +1,10 @@
-# Endee LangChain Integration
+# Endee LlamaIndex Integration
 
-LangChain vector store integration for [Endee](https://github.com/endee-io/endee).
+LlamaIndex vector store integration for [Endee](https://github.com/endee-io/endee).
 
 For Endee setup, features, and server docs see [docs.endee.io](https://docs.endee.io/quick-start).
 
-**Sections:** [Setup](#1-setup) | [Dense](#2-dense-search) | [Hybrid](#3-hybrid-search) | [Multi-Field](#4-multi-field--multi-vector) | [Filters](#5-filters) | [RAG Chain](#6-rag-chain)
+**Sections:** [Setup](#1-setup) | [Dense](#2-dense-search) | [Hybrid](#3-hybrid-search) | [Multi-Field](#4-multi-field--multi-vector) | [Filters](#5-filters) | [RAG Pipeline](#6-rag-pipeline)
 
 ---
 
@@ -13,23 +13,17 @@ For Endee setup, features, and server docs see [docs.endee.io](https://docs.ende
 ### Install
 
 ```bash
-pip install langchain-endee endee endee-model
+pip install llama-index-vector-stores-endee
 ```
 
 Pick an embedding model:
 
 ```bash
 # Option A: Local (no API key)
-pip install langchain-huggingface sentence-transformers
+pip install llama-index-embeddings-huggingface sentence-transformers
 
 # Option B: OpenAI
-pip install langchain-openai
-```
-
-For hybrid search with SPLADE (optional):
-
-```bash
-pip install fastembed
+pip install llama-index-embeddings-openai
 ```
 
 ### Create a Collection
@@ -37,22 +31,22 @@ pip install fastembed
 Collections are created with `fields=` — the same pattern as the Python client. Each field has a name, type, and params.
 
 ```python
-from langchain_endee import EndeeVectorStore, RetrievalMode
-from langchain_core.documents import Document
+import os
+from llama_index.core import Settings
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index_endee import EndeeVectorStore
 
-from langchain_huggingface import HuggingFaceEmbeddings
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+Settings.embed_model = HuggingFaceEmbedding(model_name="all-MiniLM-L6-v2")
 DIMENSION = 384
 
 # Or OpenAI:
-# from langchain_openai import OpenAIEmbeddings
-# embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+# from llama_index.embeddings.openai import OpenAIEmbedding
+# Settings.embed_model = OpenAIEmbedding(model="text-embedding-3-small")
 # DIMENSION = 1536
 
 # Dense-only collection (single vector field)
-vector_store = EndeeVectorStore(
-    embedding=embeddings,
-    api_token="your-token",       # from app.endee.io (None for local)
+vector_store = EndeeVectorStore.from_params(
+    api_token=os.getenv("ENDEE_API_TOKEN"),   # from app.endee.io (None for local)
     collection_name="my_collection",
     fields=[
         {
@@ -78,8 +72,7 @@ docker run -p 8000:8080 -v endee-data:/data endee-oss:latest
 ```
 
 ```python
-vector_store = EndeeVectorStore(
-    embedding=embeddings,
+vector_store = EndeeVectorStore.from_params(
     collection_name="local_collection",
     fields=[
         {"name": "dense", "type": "vector",
@@ -92,53 +85,31 @@ vector_store = EndeeVectorStore(
 ### Ingest Documents
 
 ```python
+from llama_index.core import Document, StorageContext, VectorStoreIndex
+
 documents = [
-    Document(
-        page_content="Python is a high-level programming language known for readability.",
-        metadata={"topic": "programming", "language": "python"},
-    ),
-    Document(
-        page_content="Machine learning gives systems the ability to learn from data.",
-        metadata={"topic": "ai", "field": "ml"},
-    ),
-    Document(
-        page_content="Vector databases store embeddings for fast similarity search.",
-        metadata={"topic": "database", "type": "vector"},
-    ),
+    Document(text="Python is a high-level programming language known for readability.",
+             metadata={"topic": "programming", "language": "python"}),
+    Document(text="Machine learning gives systems the ability to learn from data.",
+             metadata={"topic": "ai", "field": "ml"}),
+    Document(text="Vector databases store embeddings for fast similarity search.",
+             metadata={"topic": "database", "type": "vector"}),
 ]
-```
 
-#### `add_texts()` — insert into an existing store
-
-```python
-ids = vector_store.add_texts(
-    texts=[doc.page_content for doc in documents],
-    metadatas=[doc.metadata for doc in documents],
-)
-```
-
-#### `from_texts()` / `from_documents()` — create + insert in one call
-
-```python
-store = EndeeVectorStore.from_texts(
-    texts=["Python is great.", "Rust is fast."],
-    metadatas=[{"lang": "python"}, {"lang": "rust"}],
-    embedding=embeddings,
-    api_token="your-token",
-    collection_name="my_collection",
-    dimension=DIMENSION,
-    force_recreate=True,
-)
+storage_context = StorageContext.from_defaults(vector_store=vector_store)
+index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)
 ```
 
 ### Reconnect to an Existing Collection
 
+`from_params` auto-detects field names from an existing collection — no data loss:
+
 ```python
-vector_store = EndeeVectorStore.from_existing_collection(
-    collection_name="my_collection",
-    embedding=embeddings,
+vector_store = EndeeVectorStore.from_params(
     api_token="your-token",
+    collection_name="my_existing_collection",
 )
+index = VectorStoreIndex.from_vector_store(vector_store)
 ```
 
 ---
@@ -146,71 +117,101 @@ vector_store = EndeeVectorStore.from_existing_collection(
 ## 2. Dense Search
 
 ```python
-# similarity_search
-results = vector_store.similarity_search(query="How does RAG work?", k=3)
+# as_retriever
+results = index.as_retriever(similarity_top_k=3).retrieve("Tell me about vector databases")
+for node in results:
+    print(f"{node.get_score():.4f} | {node.text}")
 
-# similarity_search_with_score
-scored = vector_store.similarity_search_with_score(query="neural networks", k=3)
+# Direct VectorStoreQuery
+from llama_index.core.vector_stores.types import VectorStoreQuery
 
-# similarity_search_by_object
-query_vec = embeddings.embed_query("programming language safety")
-results = vector_store.similarity_search_by_object(embedding=query_vec, k=2)
+q_emb = Settings.embed_model.get_text_embedding("vector databases")
+result = vector_store.query(VectorStoreQuery(query_embedding=q_emb, similarity_top_k=3))
 
 # Search tuning
-results = vector_store.similarity_search(
-    query="vector search", k=10, ef=256,
-    filter=[{"topic": {"$eq": "database"}}],
+result = vector_store.query(
+    VectorStoreQuery(query_embedding=q_emb, similarity_top_k=10),
+    ef_search=256,
     prefilter_cardinality_threshold=5_000,
     filter_boost_percentage=20,
 )
+```
 
-# as_retriever
-retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-docs = retriever.invoke("What are vector databases used for?")
+### Loading many documents
+
+```python
+from llama_index.core import SimpleDirectoryReader
+
+documents = SimpleDirectoryReader("./data").load_data()
+
+storage_context = StorageContext.from_defaults(vector_store=vector_store)
+index = VectorStoreIndex.from_documents(documents, storage_context=storage_context)
+print(f"Indexed {len(documents)} documents")
 ```
 
 ---
 
 ## 3. Hybrid Search
 
-Create a collection with both `vector` and `sparse` fields:
+Create a collection with both `vector` and `sparse` fields. Sparse vectors are auto-encoded via `EndeeModelSparse` (BM25).
 
 ```python
-from langchain_endee import EndeeModelSparse
+from llama_index_endee import EndeeVectorStore, EndeeModelSparse
 
 sparse = EndeeModelSparse()  # Native BM25
 
-hybrid_store = EndeeVectorStore(
-    embedding=embeddings,
+hybrid_store = EndeeVectorStore.from_params(
     api_token="your-token",
     collection_name="hybrid_collection",
     fields=[
         {"name": "dense", "type": "vector",
          "params": {"dimension": DIMENSION, "space_type": "cosine", "precision": "int8"}},
-        {"name": "sparse", "type": "sparse", "sparse_model": "default"},
+        {"name": "sparse", "type": "sparse", "sparse_model": "endee_bm25"},
     ],
-    retrieval_mode=RetrievalMode.HYBRID,
     sparse_embedding=sparse,
     force_recreate=True,
 )
 ```
 
-All search methods automatically use both dense and sparse:
+`add()` automatically encodes sparse vectors alongside dense:
 
 ```python
-results = hybrid_store.similarity_search("vector database semantic search", k=3)
+from llama_index.core.schema import TextNode
+
+nodes = [
+    TextNode(text="The error code is XJ-99-ZQ and it crashed the server.",
+             embedding=embed_model.get_text_embedding("The error code is XJ-99-ZQ..."),
+             metadata={"type": "error_log"}),
+]
+hybrid_store.add(nodes)
+```
+
+Query with `query_str` to enable sparse matching:
+
+```python
+q_emb = embed_model.get_text_embedding("XJ-99-ZQ")
+result = hybrid_store.query(VectorStoreQuery(
+    query_embedding=q_emb,
+    query_str="XJ-99-ZQ",   # used for BM25 sparse encoding
+    similarity_top_k=3,
+))
 ```
 
 ### RRF Tuning
 
 ```python
-results = hybrid_store.similarity_search_with_score(
-    query="vector database semantic search",
-    k=3,
-    rrf_rank_constant=60,
-    dense_rrf_weight=0.7,
+result = hybrid_store.query(
+    query,
+    dense_rrf_weight=0.3,    # 0.3 dense + 0.7 sparse
+    rrf_rank_constant=30,
 )
 ```
+
+| `dense_rrf_weight` | Effect |
+|-------------------|--------|
+| `1.0` | Dense only |
+| `0.5` | Balanced (default) |
+| `0.0` | Sparse only |
 
 ---
 
@@ -218,11 +219,10 @@ results = hybrid_store.similarity_search_with_score(
 
 ### Multiple Dense Fields
 
-Use `fields=` with multiple `vector` entries, then `add_objects()` and `multi_field_search_with_rerank()`:
+Use `fields=` with multiple `vector` entries, then `add_objects()` and `multi_field_search()`:
 
 ```python
-store = EndeeVectorStore(
-    embedding=embeddings,
+store = EndeeVectorStore.from_params(
     api_token="your-token",
     collection_name="multi_field",
     fields=[
@@ -232,7 +232,6 @@ store = EndeeVectorStore(
          "params": {"dimension": 768, "space_type": "cosine", "precision": "int8"}},
         {"name": "keywords","type": "sparse", "sparse_model": "default"},
     ],
-    dense_field_name="title",   # primary field for similarity_search()
     force_recreate=True,
 )
 
@@ -249,14 +248,15 @@ store.add_objects([{
 }])
 
 # Search + fuse with weighted RRF
-results = store.multi_field_search_with_rerank(
+from llama_index_endee import rerank
+
+raw = store.multi_field_search(
     fields={
         "title":   {"query": title_vec,   "limit": 20},
         "content": {"query": content_vec, "limit": 20},
     },
-    limit=10,
-    field_weights={"title": 0.4, "content": 0.6},
 )
+fused = rerank(raw, limit=10, field_weights={"title": 0.4, "content": 0.6})
 ```
 
 ### Multi-Vector (ColBERT-style)
@@ -264,8 +264,7 @@ results = store.multi_field_search_with_rerank(
 A `multi_vector` field stores N vectors per object (one per token/chunk):
 
 ```python
-store = EndeeVectorStore(
-    embedding=embeddings,
+store = EndeeVectorStore.from_params(
     api_token="your-token",
     collection_name="colbert_collection",
     fields=[
@@ -295,96 +294,104 @@ raw = store.multi_field_search(
 )
 
 # Or fuse dense + ColBERT
-results = store.multi_field_search_with_rerank(
+raw = store.multi_field_search(
     fields={
         "dense":   {"query": dense_vec,  "limit": 10},
         "colbert": {"query": token_vecs, "limit": 10},
     },
-    limit=5,
-    field_weights={"dense": 0.5, "colbert": 0.5},
 )
-```
-
-### Manual Rerank
-
-```python
-from langchain_endee import rerank
-
-raw = store.multi_field_search(fields={...})
-fused = rerank(raw, limit=10, field_weights={"title": 0.3, "content": 0.7}, rrf_k=60)
+fused = rerank(raw, limit=5, field_weights={"dense": 0.5, "colbert": 0.5})
 ```
 
 ---
 
 ## 5. Filters
 
-Pass filters as a list of dicts (AND logic). See [Endee docs](https://docs.endee.io) for filter operators (`$eq`, `$in`, `$range`).
+Pass `filters` to `as_retriever()` or `query()` — they are converted and forwarded to the Endee API.
 
 ```python
-# $eq
-results = vector_store.similarity_search(
-    query="learning from data", k=5,
-    filter=[{"topic": {"$eq": "ai"}}],
+from llama_index.core.vector_stores.types import MetadataFilters, MetadataFilter, FilterOperator
+
+# EQ — exact match
+filters = MetadataFilters(
+    filters=[MetadataFilter(key="topic", value="ai", operator=FilterOperator.EQ)]
 )
+results = index.as_retriever(similarity_top_k=3, filters=filters).retrieve("machine learning")
 
-# Multiple filters (AND)
-results = vector_store.similarity_search(
-    query="safe languages", k=5,
-    filter=[
-        {"topic": {"$eq": "programming"}},
-        {"language": {"$in": ["python", "rust"]}},
-    ],
+# IN — match any in list
+filters = MetadataFilters(
+    filters=[MetadataFilter(key="topic", value=["ai", "database"], operator=FilterOperator.IN)]
 )
+results = index.as_retriever(similarity_top_k=3, filters=filters).retrieve("vector search")
 
-# Retriever with filters
-retriever = vector_store.as_retriever(
-    search_kwargs={"k": 3, "filter": [{"topic": {"$eq": "ai"}}]},
-)
+# Multiple filters (AND logic)
+filters = MetadataFilters(filters=[
+    MetadataFilter(key="topic", value="database", operator=FilterOperator.EQ),
+    MetadataFilter(key="type", value="vector", operator=FilterOperator.EQ),
+])
+```
 
-# get_by_ids / update_filters / delete
-docs = vector_store.get_by_ids(["id1", "id2"])
+Supported operators: `EQ` and `IN`.
 
+### CRUD Operations
+
+```python
+# Fetch objects by ID
+objects = vector_store.fetch(["node-id-1", "node-id-2"])
+
+# Update filter metadata (no re-embedding)
 vector_store.update_filters([
-    {"id": "id1", "filter": {"topic": "updated", "priority": 1}},
+    {"id": "node-id-1", "filter": {"topic": "updated", "priority": 1}},
 ])
 
-vector_store.delete(ids=["id1", "id2"])
-vector_store.delete(filter=[{"status": {"$eq": "expired"}}])
+# Delete by ID
+vector_store.delete_vector("node-id-1")
+
+# Delete by ref_doc_id filter
+vector_store.delete(ref_doc_id="doc-uuid")
+
+# Delete entire collection
+vector_store.clear()
+
+# Collection metadata
+info = vector_store.describe()
+
+# Direct access to Endee Collection object
+collection = vector_store.client
 ```
 
 ---
 
-## 6. RAG Chain
+## 6. RAG Pipeline
 
 ```python
-from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from llama_index.core import Settings, VectorStoreIndex
+from llama_index.llms.openai import OpenAI
 
+Settings.llm = OpenAI(model="gpt-4o-mini", temperature=0)
 
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
+index = VectorStoreIndex.from_vector_store(vector_store)
+query_engine = index.as_query_engine(similarity_top_k=3)
 
+response = query_engine.query("How does vector search work?")
+print(response)
+```
 
-retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+With metadata filters:
 
-prompt = ChatPromptTemplate.from_template(
-    "Answer the question based only on the context below.\n\n"
-    "Context:\n{context}\n\n"
-    "Question: {question}"
+```python
+from llama_index.core.vector_stores.types import MetadataFilters, MetadataFilter, FilterOperator
+
+retriever = index.as_retriever(
+    similarity_top_k=3,
+    filters=MetadataFilters(filters=[
+        MetadataFilter(key="topic", value="database", operator=FilterOperator.EQ),
+    ]),
 )
 
-rag_chain = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()}
-    | prompt
-    | llm
-    | StrOutputParser()
-)
-
-answer = rag_chain.invoke("How does vector search work?")
-print(answer)
+from llama_index.core.query_engine import RetrieverQueryEngine
+query_engine = RetrieverQueryEngine.from_args(retriever=retriever)
+response = query_engine.query("Explain vector similarity search")
 ```
 
 ---
@@ -397,27 +404,42 @@ print(answer)
 | `sparse` | `{indices: [int], values: [float]}` | BM25 / SPLADE keyword matching |
 | `multi_vector` | `[[float, ...], ...]` | Token-level (ColBERT), chunk-level embeddings |
 
-## Constructor Parameters
+## `from_params` Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `embedding` | `Embeddings` | *required* | LangChain embedding function |
 | `collection_name` | `str` | *required* | Name of the Endee collection |
 | `fields` | `list[dict]` | `None` | Field definitions (same as Python client) |
 | `api_token` | `str \| None` | `None` | From [app.endee.io](https://app.endee.io) (None for local) |
 | `base_url` | `str \| None` | `None` | API base URL (e.g. `http://localhost:8000/api/v2`) |
-| `retrieval_mode` | `RetrievalMode` | `DENSE` | `DENSE` or `HYBRID` |
+| `dimension` | `int \| None` | `None` | Vector dimension (simple mode only, ignored with `fields=`) |
+| `space_type` | `str` | `"cosine"` | Distance metric: `cosine`, `l2`, `ip` |
+| `precision` | `str` | `"int8"` | Quantisation: `float32`, `float16`, `int16`, `int8`, `binary` |
+| `M` | `int \| None` | `None` | HNSW bi-directional links per node |
+| `ef_con` | `int \| None` | `None` | HNSW construction quality |
 | `sparse_embedding` | `SparseEmbeddings \| None` | `None` | Sparse model for hybrid search |
-| `dense_field_name` | `str` | `"dense"` | Primary dense field for `similarity_search()` |
-| `sparse_field_name` | `str` | `"sparse"` | Sparse field for hybrid search |
+| `dense_field_name` | `str` | `"dense"` | Primary dense field name |
+| `sparse_field_name` | `str` | `"sparse"` | Sparse field name |
 | `force_recreate` | `bool` | `False` | Delete and recreate collection if exists |
-| `validate_collection_config` | `bool` | `True` | Validate dimension/config on connect |
+
+## Exports
+
+```python
+from llama_index_endee import (
+    EndeeVectorStore,   # Main vector store class
+    SparseEmbeddings,   # ABC for custom sparse models
+    SparseVector,       # Sparse vector data class
+    EndeeModelSparse,   # BM25 sparse encoder (endee_model)
+    Precision,          # Precision enum
+    rerank,             # RRF fusion for multi-field results
+)
+```
 
 ## Links
 
 - [Endee Documentation](https://docs.endee.io)
-- [Endee GitHub](https://github.com/endee-io/endee)
 - [Endee Server](https://app.endee.io)
+- [LlamaIndex Docs](https://docs.llamaindex.ai/)
 
 ## License
 

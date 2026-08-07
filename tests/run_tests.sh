@@ -5,7 +5,7 @@ usage() {
   cat <<EOF
 Usage: $0 [--token <api_token>] [--base-url <url>] [--unit] [--integration] [--clean] [-- <pytest args>]
 
-Run the endee-langchain test suite. It creates a venv, installs dependencies,
+Run the endee-llamaindex test suite. It creates a venv, installs dependencies,
 sets environment variables, and invokes pytest.
 
 Two kinds of tests, selected automatically or explicitly:
@@ -39,14 +39,14 @@ Examples:
   # Integration tests only
   $0 --token <api_token> --integration
 
-  # Fresh environment: recreate venv before and clean up after
+  # Fresh environment: recreate the venv before the run and clean up after
   $0 --unit --clean
 
   # Run a single test file
   $0 --unit -- tests/test_unit.py
 
   # Run tests matching a keyword pattern
-  $0 --token <api_token> -- -k test_hybrid
+  $0 --token <api_token> -- -k test_retrieval
 
   # Stop on first failure and show captured output
   $0 --unit -- -x -s
@@ -112,7 +112,7 @@ source "$VENV_DIR/bin/activate"
 echo "Installing dependencies ..."
 pip install --quiet --upgrade pip
 pip install --quiet -e .
-pip install --quiet pytest pytest-mock pytest-timeout pytest-asyncio numpy
+pip install --quiet pytest pytest-mock pytest-timeout numpy
 
 if [[ -n "$TOKEN" ]]; then
   export ENDEE_API_TOKEN="$TOKEN"

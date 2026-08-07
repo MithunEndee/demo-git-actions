@@ -1,1208 +1,767 @@
 """Unit tests: all tests that mock the `endee` client (no network).
 
-`TestVectorStoreUnit` covers core CRUD surface of `EndeeVectorStore`:
-init/config validation, add/from_texts/from_documents/from_existing_collection,
-similarity search, batching/truncation, delete, update_filters, and
-multi-field RRF wiring.
+`TestVectorStoreUnit` covers core CRUD on `EndeeVectorStore`
+(init/create-or-reuse, add incl. node deduplication, query, delete, clear,
+describe/fetch, constants fallback).
 
 `TestFiltersUnit` covers filter/metadata-key translation and operator
-support for `EndeeVectorStore`.
+support.
 
-`TestSparseUnit` covers sparse/hybrid embeddings: `SparseVector` validation,
-`SparseModelAdapter`, `wrap_sparse_model`, `EndeeModelSparse`, hybrid
-auto-detection, RRF wiring, and async delegation
-(`aembed_documents`/`aembed_query`). It mocks the `endee` client and the
-`endee_model` package (no network, no real BM25 model).
+`TestSparseUnit` covers sparse/hybrid embeddings, auto-detection, and RRF
+wiring.
 """
 
 from __future__ import annotations
 
-import logging
-import sys
-import types
+import importlib.util
+from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import (
-    ALL_PRECISIONS,
-    DENSE_FIELD,
-    DIMENSION,
-    METADATAS,
-    TEXTS,
-    FakeRawSparseModel,
-    make_fake_sparse_result,
-    uid,
-)  # noqa: I001
-from langchain_core.documents import Document
-from langchain_core.embeddings import Embeddings
-from pydantic import ValidationError
+from llama_index.core.schema import NodeRelationship, RelatedNodeInfo, TextNode
+from llama_index.core.vector_stores.types import (
+    FilterOperator,
+    MetadataFilter,
+    MetadataFilters,
+    VectorStoreQuery,
+)
 
-from langchain_endee import EndeeVectorStore, RetrievalMode
-from langchain_endee.sparse_embeddings import (
-    EndeeModelSparse,
+from llama_index_endee.base import EndeeVectorStore
+from llama_index_endee.constants import DEFAULT_BATCH_SIZE, MAX_VECTORS_PER_BATCH
+from llama_index_endee.sparse_embeddings import (
     SparseEmbeddings,
     SparseModelAdapter,
     SparseVector,
     wrap_sparse_model,
 )
-from langchain_endee.vectorstores import EndeeVectorStoreError
+
+DIMENSION = 4
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Vector store unit tests
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _mock_vector_store_collection(dimension=DIMENSION):
+    collection = MagicMock()
+    collection.fields = [
+        {
+            "name": "dense",
+            "type": "vector",
+            "params": {
+                "dimension": dimension,
+                "space_type": "cosine",
+                "precision": "int8",
+            },
+        }
+    ]
+    collection.search.return_value = {"results": {"dense": []}}
+    collection.describe.return_value = {
+        "name": "test",
+        "fields": collection.fields,
+        "num_objects": 0,
+    }
+    return collection
+
+
 @pytest.mark.unit
 class TestVectorStoreUnit:
-    # ── Constructor validation ───────────────────────────────────────────
+    # ── __init__ / from_params / collection creation ────────────────────────
 
-    def test_init_raises_on_missing_embedding(self, mock_endee_client):
-        """EndeeVectorStore must raise ValueError when embedding is None."""
-        with pytest.raises(ValueError):
-            EndeeVectorStore(embedding=None, collection_name="x", fields=[DENSE_FIELD])
+    def test_from_params_creates_collection_when_absent(self, mock_endee_client):
+        """from_params must create a new collection when none exists yet."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="new_coll",
+            dimension=DIMENSION,
+            space_type="cosine",
+        )
+        assert vs.collection_name == "new_coll"
+        assert "new_coll" in mock_endee_client._collections
 
-    def test_init_raises_on_missing_collection_name(
-        self, mock_endee_client, fake_embedder
+    def test_init_reuses_existing_collection(self, mock_endee_client):
+        """A second store on an existing collection must reuse it, not recreate."""
+        vs1 = EndeeVectorStore.from_params(
+            collection_name="reuse_coll", dimension=DIMENSION
+        )
+        vs1.add([TextNode(text="seed", embedding=[0.1, 0.2, 0.3, 0.4], id_="seed")])
+
+        # Second store instance connects to the same (now populated) collection.
+        vs2 = EndeeVectorStore.from_params(
+            collection_name="reuse_coll", dimension=DIMENSION
+        )
+        assert vs2.describe()["num_objects"] == 1
+
+    def test_batch_size_defaults_to_default_batch_size_constant(
+        self, mock_endee_client
     ):
-        """EndeeVectorStore must raise ValueError when collection_name is None."""
-        with pytest.raises(ValueError):
-            EndeeVectorStore(
-                embedding=fake_embedder, collection_name=None, fields=[DENSE_FIELD]
-            )
+        """A store with no explicit batch_size must use DEFAULT_BATCH_SIZE."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="default_batch", dimension=DIMENSION
+        )
+        assert vs.batch_size == DEFAULT_BATCH_SIZE
+        assert DEFAULT_BATCH_SIZE < MAX_VECTORS_PER_BATCH
 
-    def test_init_raises_on_missing_dimension_for_new_collection(
-        self, mock_endee_client, fake_embedder
+    def test_force_recreate_deletes_existing_collection(self, mock_endee_client):
+        """force_recreate=True deletes and recreates the collection, wiping its data."""
+        vs1 = EndeeVectorStore.from_params(
+            collection_name="fr_coll", dimension=DIMENSION
+        )
+        vs1.add([TextNode(text="seed", embedding=[0.1, 0.2, 0.3, 0.4], id_="seed")])
+        assert vs1.describe()["num_objects"] == 1
+
+        vs2 = EndeeVectorStore.from_params(
+            collection_name="fr_coll", dimension=DIMENSION, force_recreate=True
+        )
+        # Recreated collection is empty again.
+        assert vs2.describe()["num_objects"] == 0
+
+    def test_endee_client_override_skips_client_construction(self, mock_endee_client):
+        """An explicit endee_client must skip constructing a new Endee() client."""
+        custom_client = MagicMock()
+        custom_client.list_collections.return_value = []
+        custom_client.get_collection.return_value = _mock_vector_store_collection()
+
+        EndeeVectorStore.from_params(
+            collection_name="coll",
+            dimension=DIMENSION,
+            endee_client=custom_client,
+        )
+        custom_client.create_collection.assert_called_once()
+        # Confirms endee_client= was used, not a new client from the patched Endee().
+        assert mock_endee_client._collections == {}
+
+    def test_endee_collection_override_skips_collection_creation(
+        self, mock_endee_client
     ):
-        """Creating a collection with no dimension/fields must raise ValueError."""
-        with pytest.raises(ValueError):
-            EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=uid(),
-                dimension=None,
-                fields=None,
-            )
+        """An explicit endee_collection must skip any collection lookup or creation."""
+        collection = _mock_vector_store_collection()
+        EndeeVectorStore.from_params(
+            collection_name="unused_name",
+            dimension=DIMENSION,
+            endee_collection=collection,
+        )
+        # No collection lookup/creation should have happened against the client.
+        assert mock_endee_client._collections == {}
 
-    def test_init_propagates_network_failure(
-        self, mock_endee_client, fake_embedder, monkeypatch
-    ):
-        """A list_collections network failure must propagate out of the constructor."""
+    def test_network_failure_during_connect_propagates(self):
+        """A connection error from list_collections() must propagate out of __init__."""
+        broken_client = MagicMock()
+        broken_client.list_collections.side_effect = ConnectionError("no route to host")
 
-        def _raise(*args, **kwargs):
-            raise ConnectionError("could not reach Endee server")
-
-        monkeypatch.setattr(mock_endee_client, "list_collections", _raise)
         with pytest.raises(ConnectionError):
-            EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=uid(),
+            EndeeVectorStore.from_params(
+                collection_name="doesnt_matter",
                 dimension=DIMENSION,
+                endee_client=broken_client,
             )
 
-    def test_init_with_endee_client_skips_client_creation(
-        self, mock_endee_client, fake_embedder, monkeypatch
-    ):
-        """Passing an existing endee_client must skip EndeeClient construction."""
+    # ── add(): deduplicate by node_id ───────────────────────────────────────
 
-        def _fail_if_called(*args, **kwargs):
-            raise AssertionError("EndeeClient() should not be constructed")
-
-        monkeypatch.setattr("langchain_endee.vectorstores.EndeeClient", _fail_if_called)
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=uid(),
-            dimension=DIMENSION,
-            endee_client=mock_endee_client,
+    def test_add_dedups_by_node_id_last_wins(self, mock_endee_client):
+        """add() deduplicates nodes sharing a node_id, keeping the last content."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="dedup_coll", dimension=DIMENSION
         )
-        assert store.client is mock_endee_client
+        first = TextNode(text="first version", embedding=[0.1, 0, 0, 0], id_="dup")
+        second = TextNode(text="second version", embedding=[0, 0.1, 0, 0], id_="dup")
 
-    def test_init_with_fields_ignores_dimension_and_space_type(
-        self, mock_endee_client, fake_embedder
-    ):
-        """An explicit fields= must take precedence over dimension/space_type kwargs."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            dimension=DIMENSION + 100,
-            space_type="l2",
-            force_recreate=True,
+        ids = vs.add([first, second])
+
+        assert ids == ["dup"]
+        stored = vs._collection._store["dup"]
+        assert stored["meta"]["_node_content"]
+        # The LAST occurrence's embedding/content must win.
+        assert stored["fields"]["dense"] == [0, 0.1, 0, 0]
+
+    def test_add_with_empty_node_list_returns_empty_list(self, mock_endee_client):
+        """add() with an empty node list must return an empty list and store nothing."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="empty_add_coll", dimension=DIMENSION
         )
-        # The custom fields= definition wins; dimension/space_type params
-        # passed alongside fields= are ignored for collection creation.
-        fm = store.field_map
-        assert fm["dense"]["params"]["dimension"] == DIMENSION
-        assert fm["dense"]["params"]["space_type"] == "cosine"
-
-    def test_init_force_recreate_on_nonexistent_collection_is_noop(
-        self, mock_endee_client, fake_embedder, monkeypatch
-    ):
-        """force_recreate must not call delete_collection on a nonexistent one."""
-        calls = []
-        original = mock_endee_client.delete_collection
-
-        def spy(name):
-            calls.append(name)
-            return original(name)
-
-        monkeypatch.setattr(mock_endee_client, "delete_collection", spy)
-        EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=uid(),
-            dimension=DIMENSION,
-            force_recreate=True,
-        )
-        assert calls == []
-
-    def test_sparse_embeddings_property_raises_when_not_set(
-        self, mock_endee_client, fake_embedder
-    ):
-        """sparse_embeddings must raise ValueError when none is configured."""
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=uid(),
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        with pytest.raises(ValueError, match="Sparse embeddings are not set"):
-            _ = store.sparse_embeddings
-
-    # ── _validate_collection_config ──────────────────────────────────────
-
-    def test_validate_collection_config_dimension_mismatch_raises(
-        self, mock_endee_client, fake_embedder
-    ):
-        """Reconnecting with a mismatched dimension must raise EndeeVectorStoreError."""
-        name = uid()
-        EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        with pytest.raises(EndeeVectorStoreError, match="dimension"):
-            EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=name,
-                dimension=DIMENSION + 1,
-                space_type="cosine",
-            )
-
-    def test_validate_collection_config_space_type_mismatch_raises(
-        self, mock_endee_client, fake_embedder
-    ):
-        """A mismatched space_type on reconnect must raise EndeeVectorStoreError."""
-        name = uid()
-        EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        with pytest.raises(EndeeVectorStoreError, match="space_type"):
-            EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=name,
-                dimension=DIMENSION,
-                space_type="l2",
-            )
-
-    def test_validate_collection_config_hybrid_requested_on_dense_only_raises(
-        self, mock_endee_client, fake_embedder, fake_sparse_embedding
-    ):
-        """Hybrid retrieval on dense-only must raise EndeeVectorStoreError."""
-        from langchain_endee import RetrievalMode
-
-        name = uid()
-        EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        with pytest.raises(EndeeVectorStoreError, match="dense-only"):
-            EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=name,
-                dimension=DIMENSION,
-                retrieval_mode=RetrievalMode.HYBRID,
-                sparse_embedding=fake_sparse_embedding,
-            )
-
-    def test_validate_collection_config_hybrid_requested_no_sparse_embedding_raises(
-        self, mock_endee_client, fake_embedder
-    ):
-        """Hybrid without sparse_embedding must raise EndeeVectorStoreError."""
-        from langchain_endee import RetrievalMode
-
-        name = uid()
-        EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "default"},
-            ],
-            force_recreate=True,
-        )
-        with pytest.raises(EndeeVectorStoreError, match="no sparse_embedding"):
-            EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=name,
-                dimension=DIMENSION,
-                retrieval_mode=RetrievalMode.HYBRID,
-            )
-
-    def test_validate_collection_config_precision_mismatch_warns_only(
-        self, mock_endee_client, fake_embedder, caplog
-    ):
-        """A mismatched precision must log a warning rather than raise."""
-        name = uid()
-        EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        with caplog.at_level(logging.WARNING, logger="langchain_endee.vectorstores"):
-            store = EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=name,
-                dimension=DIMENSION,
-                precision="float32",
-            )
-        assert store is not None
-        assert any("precision" in rec.message for rec in caplog.records)
-
-    def test_validate_collection_config_m_and_ef_con_mismatch_warns_only(
-        self, mock_endee_client, fake_embedder, caplog
-    ):
-        """Mismatched M and ef_con values must log warnings rather than raise."""
-        name = uid()
-        # Simple mode (dimension=) sets M/ef_con; raw fields= does not.
-        EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            dimension=DIMENSION,
-            force_recreate=True,
-        )
-        with caplog.at_level(logging.WARNING, logger="langchain_endee.vectorstores"):
-            store = EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=name,
-                dimension=DIMENSION,
-                M=99,
-                ef_con=999,
-            )
-        assert store is not None
-        messages = " ".join(rec.message for rec in caplog.records)
-        assert "M is" in messages
-        assert "ef_con is" in messages
-
-    def test_validate_collection_config_hybrid_available_dense_requested_warns_only(
-        self, mock_endee_client, fake_embedder, fake_sparse_embedding, caplog
-    ):
-        """Reconnecting dense to a hybrid-capable collection warns, but stays dense."""
-        name = uid()
-        EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "default"},
-            ],
-            force_recreate=True,
-        )
-        with caplog.at_level(logging.WARNING, logger="langchain_endee.vectorstores"):
-            store = EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=name,
-                dimension=DIMENSION,
-            )
-        assert store.retrieval_mode.value == "dense"
-        messages = " ".join(rec.message for rec in caplog.records)
-        assert "supports hybrid search" in messages
-
-    def test_validate_collection_config_describe_failure_logs_and_returns(
-        self, mock_endee_client, fake_embedder, monkeypatch, caplog
-    ):
-        """A describe() failure during config validation must warn, not raise."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-
-        def _raise():
-            raise RuntimeError("describe exploded")
-
-        monkeypatch.setattr(store.collection, "describe", _raise)
-        with caplog.at_level(logging.WARNING, logger="langchain_endee.vectorstores"):
-            # Calling directly since validate_collection_config runs at
-            # construction time, before we can monkeypatch describe().
-            store._validate_collection_config()
-        assert any(
-            "Could not fetch collection config" in r.message for r in caplog.records
-        )
-
-    # ── add_texts / from_texts / from_documents / from_existing_collection ──
-
-    def test_add_texts_builds_correct_upsert_payload(
-        self, mock_endee_client, fake_embedder
-    ):
-        """add_texts must upsert each text with its embedding, text, and metadata."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        ids = store.add_texts(texts=TEXTS[:2], metadatas=METADATAS[:2], ids=["a", "b"])
-        assert ids == ["a", "b"]
-
-        stored = store.collection.get_objects(["a", "b"])
-        assert len(stored) == 2
-        for entry, text, meta in zip(stored, TEXTS[:2], METADATAS[:2]):
-            assert entry["meta"]["text"] == text
-            assert entry["meta"]["metadata"] == meta
-            assert entry["filter"] == meta
-            assert "dense" in entry["fields"]
-            assert len(entry["fields"]["dense"]) == DIMENSION
-
-    def test_add_texts_raises_on_id_length_mismatch(
-        self, mock_endee_client, fake_embedder
-    ):
-        """add_texts must raise ValueError on an id/text count mismatch."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        with pytest.raises(ValueError, match="ids"):
-            store.add_texts(texts=TEXTS[:2], ids=["only-one"])
-
-    def test_add_texts_raises_on_metadata_length_mismatch(
-        self, mock_endee_client, fake_embedder
-    ):
-        """add_texts must raise ValueError on a metadata/text count mismatch."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        with pytest.raises(ValueError, match="metadatas"):
-            store.add_texts(texts=TEXTS[:2], metadatas=[{"only": "one"}])
-
-    def test_from_texts_creates_and_populates_store(
-        self, mock_endee_client, fake_embedder
-    ):
-        """from_texts must create the collection and upsert all provided texts."""
-        name = uid()
-        store = EndeeVectorStore.from_texts(
-            texts=TEXTS[:3],
-            embedding=fake_embedder,
-            metadatas=METADATAS[:3],
-            collection_name=name,
-            dimension=DIMENSION,
-            force_recreate=True,
-        )
-        assert (
-            len(store.collection.get_objects(list(store.collection._store.keys()))) == 3
-        )
-
-    def test_from_documents_creates_and_populates_store(
-        self, mock_endee_client, fake_embedder
-    ):
-        """from_documents must create the collection and upsert all given documents."""
-        name = uid()
-        docs = [
-            Document(page_content=t, metadata=m)
-            for t, m in zip(TEXTS[:3], METADATAS[:3])
-        ]
-        store = EndeeVectorStore.from_documents(
-            documents=docs,
-            embedding=fake_embedder,
-            collection_name=name,
-            dimension=DIMENSION,
-            force_recreate=True,
-        )
-        assert len(store.collection._store) == 3
-
-    def test_from_existing_collection_reconnects(
-        self, mock_endee_client, fake_embedder
-    ):
-        """from_existing_collection must reconnect without re-adding existing data."""
-        name = uid()
-        EndeeVectorStore.from_texts(
-            texts=TEXTS[:2],
-            embedding=fake_embedder,
-            metadatas=METADATAS[:2],
-            collection_name=name,
-            dimension=DIMENSION,
-            force_recreate=True,
-        )
-        store2 = EndeeVectorStore.from_existing_collection(
-            collection_name=name,
-            embedding=fake_embedder,
-        )
-        assert store2.collection_name == name
-        assert len(store2.collection._store) == 2
-
-    def test_from_texts_raises_when_dimension_client_and_fields_all_missing(
-        self, mock_endee_client, fake_embedder
-    ):
-        """from_texts must raise ValueError if dimension, client, fields are unset."""
-        with pytest.raises(ValueError, match="dimension must be explicitly provided"):
-            EndeeVectorStore.from_texts(
-                texts=TEXTS[:2],
-                embedding=fake_embedder,
-                collection_name=uid(),
-                dimension=None,
-                endee_client=None,
-                fields=None,
-            )
-
-    def test_create_collection_wraps_backend_error(
-        self, mock_endee_client, fake_embedder, monkeypatch
-    ):
-        """A simple-mode creation backend error must wrap in EndeeVectorStoreError."""
-
-        def _raise(name, fields):
-            raise RuntimeError("create failed")
-
-        monkeypatch.setattr(mock_endee_client, "create_collection", _raise)
-        with pytest.raises(EndeeVectorStoreError, match="Failed to create"):
-            EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=uid(),
-                dimension=DIMENSION,
-            )
-
-    def test_create_collection_raw_wraps_backend_error(
-        self, mock_endee_client, fake_embedder, monkeypatch
-    ):
-        """A fields=-based creation backend error must wrap in EndeeVectorStoreError."""
-
-        def _raise(name, fields):
-            raise RuntimeError("create failed")
-
-        monkeypatch.setattr(mock_endee_client, "create_collection", _raise)
-        with pytest.raises(EndeeVectorStoreError, match="Failed to create"):
-            EndeeVectorStore(
-                embedding=fake_embedder,
-                collection_name=uid(),
-                fields=[DENSE_FIELD],
-            )
-
-    @pytest.mark.parametrize("precision", ALL_PRECISIONS)
-    def test_precision_is_passed_through_to_field_config(
-        self, mock_endee_client, fake_embedder, precision
-    ):
-        """Every supported precision value must reach the field config unchanged."""
-        name = uid(f"precision_{precision}")
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            dimension=DIMENSION,
-            precision=precision,
-            force_recreate=True,
-        )
-        assert (
-            store.field_map[store.dense_field_name]["params"]["precision"] == precision
-        )
-
-    # ── add_texts empty inputs ─────────────────────────────────────────────
-
-    def test_add_texts_with_empty_texts_returns_empty_list(
-        self, mock_endee_client, fake_embedder
-    ):
-        """add_texts must return an empty list and add nothing for empty inputs."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        ids = store.add_texts(texts=[], metadatas=[], ids=[])
+        ids = vs.add([])
         assert ids == []
-        assert len(store.collection._store) == 0
+        assert vs._collection._store == {}
 
-    def test_add_texts_chunks_across_multiple_batches(
-        self, mock_endee_client, fake_embedder
+    def test_add_dedups_three_nodes_sharing_same_node_id_last_wins(
+        self, mock_endee_client
     ):
-        """add_texts must upsert all texts even across multiple batch_size calls."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
+        """Three nodes sharing a node_id: the last one wins, one entry stored."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="triple_dup_coll", dimension=DIMENSION
         )
-        ids = store.add_texts(texts=TEXTS, metadatas=METADATAS, batch_size=2)
-        assert len(ids) == len(TEXTS)
-        assert len(store.collection._store) == len(TEXTS)
+        first = TextNode(text="v1", embedding=[1, 0, 0, 0], id_="dup")
+        second = TextNode(text="v2", embedding=[0, 1, 0, 0], id_="dup")
+        third = TextNode(text="v3", embedding=[0, 0, 1, 0], id_="dup")
 
-    # ── _validate_batch_size ──────────────────────────────────────────────
+        ids = vs.add([first, second, third])
 
-    def test_validate_batch_size_at_max_is_allowed(
-        self, mock_endee_client, fake_embedder
+        assert ids == ["dup"]
+        stored = vs._collection._store["dup"]
+        assert stored["fields"]["dense"] == [0, 0, 1, 0]
+
+    def test_add_dedup_multiple_duplicates_interspersed_with_distinct_nodes(
+        self, mock_endee_client
     ):
-        """_validate_batch_size must allow a size exactly at MAX_VECTORS_PER_BATCH."""
-        from endee import constants
-
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
+        """A repeated id keeps its last content at the earliest relative position."""
+        # id1 appears 3 times; its content should come from the last one (E).
+        vs = EndeeVectorStore.from_params(
+            collection_name="multi_dup_interspersed_coll", dimension=DIMENSION
         )
-        assert store._validate_batch_size(constants.MAX_VECTORS_PER_BATCH) == (
-            constants.MAX_VECTORS_PER_BATCH
+        a = TextNode(text="A", embedding=[1, 0, 0, 0], id_="id1")
+        b = TextNode(text="B", embedding=[0, 1, 0, 0], id_="id2")
+        c = TextNode(text="C", embedding=[0, 0, 1, 0], id_="id1")
+        d = TextNode(text="D", embedding=[0, 0, 0, 1], id_="id3")
+        e = TextNode(text="E", embedding=[1, 1, 1, 1], id_="id1")
+
+        ids = vs.add([a, b, c, d, e])
+
+        assert ids == ["id2", "id3", "id1"]
+        assert vs._collection._store["id1"]["fields"]["dense"] == [1, 1, 1, 1]
+        assert vs._collection._store["id2"]["fields"]["dense"] == [0, 1, 0, 0]
+        assert vs._collection._store["id3"]["fields"]["dense"] == [0, 0, 0, 1]
+        assert len(vs._collection._store) == 3
+
+    def test_add_dedup_preserves_last_occurrence_position(self, mock_endee_client):
+        """Deduplication keeps the last occurrence's content at the earlier position."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="dedup_order_coll", dimension=DIMENSION
+        )
+        a = TextNode(text="A", embedding=[1, 0, 0, 0], id_="id1")
+        b = TextNode(text="B", embedding=[0, 1, 0, 0], id_="id2")
+        c = TextNode(text="C", embedding=[0, 0, 1, 0], id_="id1")
+
+        ids = vs.add([a, b, c])
+
+        # seen = {"id1": 2, "id2": 1} -> sorted(values) = [1, 2]
+        # -> [nodes[1], nodes[2]] = [b, c]
+        assert ids == ["id2", "id1"]
+        assert vs._collection._store["id1"]["fields"]["dense"] == [0, 0, 1, 0]
+        assert vs._collection._store["id2"]["fields"]["dense"] == [0, 1, 0, 0]
+
+    # ── delete / delete_vector / clear ──────────────────────────────────────
+
+    def test_delete_calls_delete_by_filter_with_ref_doc_id(self, mock_endee_client):
+        """delete(ref_doc_id) calls delete_by_filter with an $eq filter on it."""
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        vs.delete("doc123")
+        collection.delete_by_filter.assert_called_once_with(
+            [{"ref_doc_id": {"$eq": "doc123"}}]
         )
 
-    def test_validate_batch_size_one_over_max_raises(
-        self, mock_endee_client, fake_embedder
+    def test_delete_vector_calls_delete_object(self, mock_endee_client):
+        """delete_vector() calls delete_object with the id, returning its result."""
+        collection = _mock_vector_store_collection()
+        collection.delete_object.return_value = {"deleted": 1}
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        result = vs.delete_vector("vec1")
+        collection.delete_object.assert_called_once_with("vec1")
+        assert result == {"deleted": 1}
+
+    def test_clear_deletes_the_collection(self, mock_endee_client):
+        """clear() must delete the underlying collection."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="clear_coll", dimension=DIMENSION
+        )
+        assert "clear_coll" in mock_endee_client._collections
+        vs.clear()
+        assert "clear_coll" not in mock_endee_client._collections
+
+    # ── describe()/fetch(): pass-through and graceful fallback on error ─────
+
+    def test_describe_passes_through_collection_metadata(self, mock_endee_client):
+        """describe() must return the collection's describe() output unchanged."""
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        info = vs.describe()
+        assert info == collection.describe.return_value
+
+    def test_describe_swallows_exception_and_returns_empty_dict(
+        self, mock_endee_client
     ):
-        """_validate_batch_size must raise ValueError one over MAX_VECTORS_PER_BATCH."""
-        from endee import constants
-
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
+        """describe() must swallow collection exceptions and return an empty dict."""
+        collection = _mock_vector_store_collection()
+        collection.describe.side_effect = RuntimeError("boom")
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
         )
-        with pytest.raises(ValueError):
-            store._validate_batch_size(constants.MAX_VECTORS_PER_BATCH + 1)
+        assert vs.describe() == {}
 
-    def test_validate_batch_size_one_under_max_is_allowed(
-        self, mock_endee_client, fake_embedder
-    ):
-        """_validate_batch_size must allow a size one under MAX_VECTORS_PER_BATCH."""
-        from endee import constants
-
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
+    def test_fetch_passes_through_collection_objects(self, mock_endee_client):
+        """fetch() must return collection.get_objects()'s output unchanged."""
+        collection = _mock_vector_store_collection()
+        collection.get_objects.return_value = [{"id": "a"}]
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
         )
-        assert store._validate_batch_size(constants.MAX_VECTORS_PER_BATCH - 1) == (
-            constants.MAX_VECTORS_PER_BATCH - 1
+        assert vs.fetch(["a"]) == [{"id": "a"}]
+        collection.get_objects.assert_called_once_with(["a"])
+
+    def test_fetch_swallows_exception_and_returns_empty_list(self, mock_endee_client):
+        """fetch() must swallow collection exceptions and return an empty list."""
+        collection = _mock_vector_store_collection()
+        collection.get_objects.side_effect = RuntimeError("boom")
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
         )
+        assert vs.fetch(["a"]) == []
 
-    def test_upsert_batch_logs_and_reraises_on_backend_error(
-        self, mock_endee_client, fake_embedder, monkeypatch, caplog
-    ):
-        """A backend error during upsert must log the error, then re-raise it."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
+    # ── update_filters ──────────────────────────────────────────────────────
+
+    def test_update_filters_delegates_to_collection(self, mock_endee_client):
+        """update_filters() must delegate to the collection and return its result."""
+        collection = _mock_vector_store_collection()
+        collection.update_filters.return_value = "2 filters updated"
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
         )
-
-        def _raise(entries):
-            raise RuntimeError("upsert exploded")
-
-        monkeypatch.setattr(store.collection, "upsert", _raise)
-        with caplog.at_level(logging.ERROR, logger="langchain_endee.vectorstores"):
-            with pytest.raises(RuntimeError, match="upsert exploded"):
-                store.add_texts(texts=TEXTS[:1], metadatas=METADATAS[:1])
-        assert any("Error upserting batch" in r.message for r in caplog.records)
-
-    # ── EMBEDDING_MODEL_LIMITS / _truncate_text / _detect_embedding_model_type
-
-    @pytest.mark.parametrize(
-        ("class_name", "expected_type", "expected_limit"),
-        [
-            ("OpenAIEmbeddings", "openai", 8191),
-            ("CohereEmbeddings", "cohere", 512),
-            ("HuggingFaceEmbeddings", "huggingface", 512),
-            ("SomeRandomEmbeddings", "default", 512),
-        ],
-        ids=["openai", "cohere", "huggingface", "default"],
-    )
-    def test_detect_embedding_model_type_and_truncation_limit(
-        self, mock_endee_client, class_name, expected_type, expected_limit
-    ):
-        """Type/limit detection keys off class name; truncation stops at the limit."""
-        # Covers both _detect_embedding_model_type (via class name) and
-        # _truncate_text (at-limit text is untouched, over-limit text is cut).
-        embedding_cls = type(
-            class_name,
-            (Embeddings,),
-            {
-                "embed_documents": lambda self, texts: [
-                    [0.0] * DIMENSION for _ in texts
-                ],
-                "embed_query": lambda self, text: [0.0] * DIMENSION,
-            },
-        )
-        embedding = embedding_cls()
-
-        name = uid(f"detect_{expected_type}")
-        store = EndeeVectorStore(
-            embedding=embedding,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        assert store.embedding_model_type == expected_type
-        assert store.max_text_length == expected_limit
-
-        # Exactly at the limit (estimated_tokens == max_tokens) -> no truncation.
-        at_limit_text = "a" * (expected_limit * 4)
-        assert store._truncate_text(at_limit_text) == at_limit_text
-
-        # One token over the limit -> truncated to max_chars.
-        over_limit_text = "a" * ((expected_limit + 1) * 4)
-        truncated = store._truncate_text(over_limit_text)
-        expected_max_chars = int(expected_limit * 4 * 0.9)
-        assert len(truncated) == expected_max_chars
-        assert truncated != over_limit_text
-
-    # ── similarity_search_with_score / similarity_search_by_object_with_score
-
-    def test_similarity_search_by_object_with_score_orders_by_cosine(
-        self, mock_endee_client, fake_embedder
-    ):
-        """similarity_search_by_object_with_score must rank by cosine similarity."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-
-        vec_a = [1.0] + [0.0] * (DIMENSION - 1)
-        vec_b = [0.0, 1.0] + [0.0] * (DIMENSION - 2)
-        vec_c = [0.9, 0.1] + [0.0] * (DIMENSION - 2)  # closer to a than b
-
-        store.add_objects(
-            [
-                {
-                    "id": "a",
-                    "meta": {"text": "doc a"},
-                    "filter": {},
-                    "fields": {"dense": vec_a},
-                },
-                {
-                    "id": "b",
-                    "meta": {"text": "doc b"},
-                    "filter": {},
-                    "fields": {"dense": vec_b},
-                },
-                {
-                    "id": "c",
-                    "meta": {"text": "doc c"},
-                    "filter": {},
-                    "fields": {"dense": vec_c},
-                },
-            ]
-        )
-
-        results = store.similarity_search_by_object_with_score(vec_a, k=3)
-        ids_in_order = [doc.metadata["_id"] for doc, _ in results]
-        assert ids_in_order == ["a", "c", "b"]
-
-        scores = [score for _, score in results]
-        assert scores[0] == pytest.approx(1.0)
-        assert scores[0] > scores[1] > scores[2]
-
-    def test_similarity_search_with_score_matches_computed_ranking(
-        self, mock_endee_client, fake_embedder
-    ):
-        """similarity_search_with_score must match an independent cosine ranking."""
-        import numpy as np
-
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        ids = store.add_texts(
-            texts=TEXTS, metadatas=METADATAS, ids=[f"d{i}" for i in range(len(TEXTS))]
-        )
-
-        query = "vector database similarity"
-        qvec = np.array(fake_embedder.embed_query(query))
-        expected_scores = {}
-        for doc_id, text in zip(ids, TEXTS):
-            v = np.array(fake_embedder.embed_documents([text])[0])
-            expected_scores[doc_id] = float(
-                np.dot(qvec, v) / (np.linalg.norm(qvec) * np.linalg.norm(v))
-            )
-        expected_order = sorted(expected_scores, key=expected_scores.get, reverse=True)
-
-        results = store.similarity_search_with_score(query, k=len(TEXTS))
-        actual_order = [doc.metadata["_id"] for doc, _ in results]
-        assert actual_order == expected_order
-        for doc, score in results:
-            assert score == pytest.approx(expected_scores[doc.metadata["_id"]])
-
-    @pytest.mark.parametrize(
-        "sparse_kwargs",
-        [
-            {"sparse_indices": [1, 2, 3]},
-            {"sparse_values": [0.1, 0.2, 0.3]},
-        ],
-        ids=["only_indices", "only_values"],
-    )
-    def test_similarity_search_by_object_asymmetric_sparse_input_falls_back_to_dense(
-        self,
-        mock_endee_client,
-        fake_embedder,
-        fake_sparse_embedding,
-        caplog,
-        sparse_kwargs,
-    ):
-        """An indices-only or values-only input warns and falls back to dense-only."""
-        from langchain_endee import RetrievalMode
-
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "default"},
-            ],
-            retrieval_mode=RetrievalMode.HYBRID,
-            sparse_embedding=fake_sparse_embedding,
-            force_recreate=True,
-        )
-        store.add_texts(texts=TEXTS[:2], metadatas=METADATAS[:2])
-        vec = fake_embedder.embed_query("python")
-        with caplog.at_level(logging.WARNING, logger="langchain_endee.vectorstores"):
-            results = store.similarity_search_by_object(vec, k=2, **sparse_kwargs)
-        assert isinstance(results, list)
-        assert any(
-            "Falling back to dense-only search" in r.message for r in caplog.records
-        )
-
-    def test_results_to_docs_skips_entries_with_no_text(
-        self, mock_endee_client, fake_embedder, caplog
-    ):
-        """_results_to_docs must skip entries lacking text, and log a warning."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        raw_results = [
-            {"id": "has-text", "meta": {"text": "hello"}, "similarity": 0.9},
-            {"id": "no-text", "meta": {}, "similarity": 0.5},
+        updates = [
+            {"id": "vec1", "filter": {"category": "B"}},
+            {"id": "vec2", "filter": {"category": "C", "priority": 1}},
         ]
-        with caplog.at_level(logging.WARNING, logger="langchain_endee.vectorstores"):
-            docs = store._results_to_docs(raw_results)
-        assert len(docs) == 1
-        assert docs[0][0].metadata["_id"] == "has-text"
-        assert any("Skipping" in r.message for r in caplog.records)
+        result = vs.update_filters(updates)
+        collection.update_filters.assert_called_once_with(updates)
+        assert result == "2 filters updated"
 
-    # ── delete() ──────────────────────────────────────────────────────────
+    def test_update_filters_empty_list(self, mock_endee_client):
+        """update_filters() must accept an empty list of updates without error."""
+        collection = _mock_vector_store_collection()
+        collection.update_filters.return_value = "0 filters updated"
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        result = vs.update_filters([])
+        collection.update_filters.assert_called_once_with([])
+        assert result is not None
 
-    def test_delete_raises_when_neither_ids_nor_filter_given(
-        self, mock_endee_client, fake_embedder
+    # ── query_kwargs compat ─────────────────────────────────────────────────
+
+    def _make_base_query(self):
+        return VectorStoreQuery(
+            query_embedding=[0.1, 0.2, 0.3, 0.4], similarity_top_k=2
+        )
+
+    @staticmethod
+    def _inject_query_kwargs(q, **extra):
+        object.__setattr__(q, "query_kwargs", extra)
+        return q
+
+    def test_prefilter_via_query_kwargs(self, mock_endee_client):
+        """query() must read prefilter_cardinality_threshold from query_kwargs."""
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        q = self._inject_query_kwargs(
+            self._make_base_query(), prefilter_cardinality_threshold=5000
+        )
+        vs.query(q)
+        call_kwargs = collection.search.call_args[1]
+        assert call_kwargs["prefilter_cardinality_threshold"] == 5000
+
+    def test_filter_boost_via_query_kwargs(self, mock_endee_client):
+        """query() reads filter_boost_percentage from query_kwargs and forwards it."""
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        q = self._inject_query_kwargs(
+            self._make_base_query(), filter_boost_percentage=25
+        )
+        vs.query(q)
+        call_kwargs = collection.search.call_args[1]
+        assert call_kwargs["filter_boost_percentage"] == 25
+
+    def test_both_params_via_query_kwargs(self, mock_endee_client):
+        """query() forwards both threshold params together when set via query_kwargs."""
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        q = self._inject_query_kwargs(
+            self._make_base_query(),
+            prefilter_cardinality_threshold=20000,
+            filter_boost_percentage=10,
+        )
+        vs.query(q)
+        call_kwargs = collection.search.call_args[1]
+        assert call_kwargs["prefilter_cardinality_threshold"] == 20000
+        assert call_kwargs["filter_boost_percentage"] == 10
+
+    def test_explicit_kwarg_takes_precedence_over_query_kwargs(self, mock_endee_client):
+        """An explicit query() kwarg wins over the same value set via query_kwargs."""
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        q = self._inject_query_kwargs(
+            self._make_base_query(), prefilter_cardinality_threshold=99999
+        )
+        vs.query(q, prefilter_cardinality_threshold=1000)
+        call_kwargs = collection.search.call_args[1]
+        assert call_kwargs["prefilter_cardinality_threshold"] == 1000
+
+    def test_no_query_kwargs_attr_omits_params(self, mock_endee_client):
+        """query() omits both threshold params when query has no query_kwargs."""
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        q = self._make_base_query()
+        assert not hasattr(q, "query_kwargs")
+        vs.query(q)
+        call_kwargs = collection.search.call_args[1]
+        assert "prefilter_cardinality_threshold" not in call_kwargs
+        assert "filter_boost_percentage" not in call_kwargs
+
+    # ── query(): ef_search / top_k forwarding into search_fields ────────────
+
+    def test_query_forwards_ef_search_and_top_k_into_search_call(
+        self, mock_endee_client
     ):
-        """delete must raise ValueError when called without ids or filter."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
+        """query() must forward ef_search and translate top_k into search limit."""
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
         )
-        with pytest.raises(ValueError):
-            store.delete()
+        query = self._make_base_query()
+        vs.query(query, ef_search=256)
+        call_kwargs = collection.search.call_args[1]
+        assert call_kwargs["ef_search"] == 256
+        assert call_kwargs["fields"]["dense"]["limit"] == 2
 
-    def test_delete_by_ids_removes_matching(self, mock_endee_client, fake_embedder):
-        """delete(ids=...) must remove only those ids, leaving the rest intact."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
+    def test_query_default_ef_search_matches_constant(self, mock_endee_client):
+        """query() without an explicit ef_search must default to DEFAULT_EF_SEARCH."""
+        from llama_index_endee.constants import DEFAULT_EF_SEARCH
+
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
         )
-        ids = store.add_texts(texts=TEXTS[:3], metadatas=METADATAS[:3])
-        assert store.delete(ids=[ids[0]]) is True
-        assert store.get_by_ids([ids[0]]) == []
-        assert len(store.get_by_ids(ids[1:])) == 2
+        vs.query(self._make_base_query())
+        call_kwargs = collection.search.call_args[1]
+        assert call_kwargs["ef_search"] == DEFAULT_EF_SEARCH
 
-    def test_delete_by_ids_returns_false_if_any_fail(
-        self, mock_endee_client, fake_embedder
-    ):
-        """delete(ids=...) must return False if any id fails to delete."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        ids = store.add_texts(texts=TEXTS[:2], metadatas=METADATAS[:2])
-        result = store.delete(ids=[ids[0], "does-not-exist"])
-        assert result is False
-        # The valid id was still deleted despite the overall False.
-        assert store.get_by_ids([ids[0]]) == []
+    # ── class_name() ────────────────────────────────────────────────────────
 
-    def test_delete_by_filter_calls_delete_by_filter(
-        self, mock_endee_client, fake_embedder
-    ):
-        """delete(filter=...) must remove all entries matching the filter."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
-        assert store.delete(filter=[{"category": {"$eq": "programming"}}]) is True
-        remaining = store.similarity_search(
-            "programming", k=10, filter=[{"category": {"$eq": "programming"}}]
-        )
-        assert remaining == []
+    def test_class_name_returns_endeevectorstore(self):
+        """class_name() must return the string 'EndeeVectorStore'."""
+        assert EndeeVectorStore.class_name() == "EndeeVectorStore"
 
-    def test_delete_by_filter_returns_false_on_backend_error(
-        self, mock_endee_client, fake_embedder, monkeypatch, caplog
-    ):
-        """delete(filter=...) must return False and log if delete_by_filter fails."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        store.add_texts(texts=TEXTS[:2], metadatas=METADATAS[:2])
+    # ── add_objects() / multi_field_search(): multi-field public API ────────
 
-        def _raise(filter):  # noqa: A002
-            raise RuntimeError("delete_by_filter exploded")
-
-        monkeypatch.setattr(store.collection, "delete_by_filter", _raise)
-        with caplog.at_level(logging.ERROR, logger="langchain_endee.vectorstores"):
-            result = store.delete(filter=[{"category": {"$eq": "programming"}}])
-        assert result is False
-        assert any("Error during deletion" in r.message for r in caplog.records)
-
-    # ── get_by_ids / update_filters ──────────────────────────────────────
-
-    def test_get_by_ids_returns_empty_on_backend_error(
-        self, mock_endee_client, fake_embedder, monkeypatch, caplog
-    ):
-        """get_by_ids must return empty and log a warning if get_objects fails."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        ids = store.add_texts(texts=TEXTS[:1], metadatas=METADATAS[:1])
-
-        def _raise(ids):
-            raise RuntimeError("get_objects exploded")
-
-        monkeypatch.setattr(store.collection, "get_objects", _raise)
-        with caplog.at_level(logging.WARNING, logger="langchain_endee.vectorstores"):
-            docs = store.get_by_ids(ids)
-        assert docs == []
-        assert any("Error retrieving documents" in r.message for r in caplog.records)
-
-    def test_get_by_ids_empty_list_returns_empty(
-        self, mock_endee_client, fake_embedder
-    ):
-        """get_by_ids must return an empty list when given an empty list of ids."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        assert store.get_by_ids([]) == []
-
-    def test_update_filters_raises_on_empty_updates(
-        self, mock_endee_client, fake_embedder
-    ):
-        """update_filters must raise ValueError when given an empty list of updates."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-        with pytest.raises(ValueError):
-            store.update_filters([])
-
-    def test_update_filters_wraps_backend_error(
-        self, mock_endee_client, fake_embedder, monkeypatch
-    ):
-        """A backend error in update_filters must wrap in EndeeVectorStoreError."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
-
-        def _raise(updates):
-            raise RuntimeError("backend exploded")
-
-        monkeypatch.setattr(store.collection, "update_filters", _raise)
-        with pytest.raises(EndeeVectorStoreError):
-            store.update_filters([{"id": "x", "filter": {"a": 1}}])
-
-    # ── add_objects / multi_field_search / multi_field_search_with_rerank ──
-
-    def test_add_objects_returns_ids(self, mock_endee_client, fake_embedder):
-        """add_objects must return the ids of the objects that were added."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
+    def test_add_objects_batches_and_returns_all_ids(self, mock_endee_client):
+        """add_objects() must batch by batch_size and return all ids in order."""
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
         )
         objects = [
             {
-                "id": "o1",
-                "meta": {"text": "hello"},
+                "id": f"obj{i}",
+                "meta": {},
                 "filter": {},
-                "fields": {"dense": [0.0] * DIMENSION},
-            },
-            {
-                "id": "o2",
-                "meta": {"text": "world"},
-                "filter": {},
-                "fields": {"dense": [1.0] * DIMENSION},
-            },
+                "fields": {"dense": [0, 0, 0, 0]},
+            }
+            for i in range(5)
         ]
-        ids = store.add_objects(objects)
-        assert ids == ["o1", "o2"]
+        ids = vs.add_objects(objects, batch_size=2)
+        assert ids == [f"obj{i}" for i in range(5)]
+        assert collection.upsert.call_count == 3  # batches of 2, 2, 1
 
-    def test_add_objects_with_multi_vector_field_stores_all_vectors(
-        self, mock_endee_client, fake_embedder
+    def test_add_objects_default_batch_size_uses_store_batch_size(
+        self, mock_endee_client
     ):
-        """add_objects must store every vector in a multi_vector list unchanged."""
-        fields_def = [
-            DENSE_FIELD,
+        """add_objects() without batch_size falls back to the store's own value."""
+        collection = _mock_vector_store_collection()
+        vs = EndeeVectorStore(
+            endee_collection=collection,
+            collection_name="test",
+            dimension=DIMENSION,
+            batch_size=3,
+        )
+        objects = [
+            {
+                "id": f"obj{i}",
+                "meta": {},
+                "filter": {},
+                "fields": {"dense": [0, 0, 0, 0]},
+            }
+            for i in range(7)
+        ]
+        vs.add_objects(objects)
+        # 7 objects at batch_size=3 -> batches of 3, 3, 1
+        assert collection.upsert.call_count == 3
+
+    def test_multi_field_search_forwards_all_optional_params(self, mock_endee_client):
+        """multi_field_search() forwards filter, ef_search, both threshold params."""
+        collection = _mock_vector_store_collection()
+        collection.search.return_value = {"results": {"dense": [], "sparse": []}}
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        fields = {"dense": {"query": [0.1, 0.2, 0.3, 0.4], "limit": 5}}
+        out = vs.multi_field_search(
+            fields,
+            filter=[{"category": {"$eq": "ai"}}],
+            ef_search=200,
+            prefilter_cardinality_threshold=1000,
+            filter_boost_percentage=15,
+        )
+        call_kwargs = collection.search.call_args[1]
+        assert call_kwargs["fields"] == fields
+        assert call_kwargs["ef_search"] == 200
+        assert call_kwargs["filter"] == [{"category": {"$eq": "ai"}}]
+        assert call_kwargs["prefilter_cardinality_threshold"] == 1000
+        assert call_kwargs["filter_boost_percentage"] == 15
+        assert out == {"results": {"dense": [], "sparse": []}}
+
+    def test_multi_field_search_omits_optional_params_when_not_given(
+        self, mock_endee_client
+    ):
+        """multi_field_search() omits optional params entirely when unsupplied."""
+        collection = _mock_vector_store_collection()
+        collection.search.return_value = {"results": {}}
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        fields = {"dense": {"query": [0.1, 0.2, 0.3, 0.4], "limit": 5}}
+        vs.multi_field_search(fields)
+        call_kwargs = collection.search.call_args[1]
+        assert "filter" not in call_kwargs
+        assert "prefilter_cardinality_threshold" not in call_kwargs
+        assert "filter_boost_percentage" not in call_kwargs
+
+    def test_add_objects_with_multi_vector_field(self, mock_endee_client):
+        """add_objects() accepts an object with a dense and a multi_vector field."""
+        fields = [
+            {
+                "name": "dense",
+                "type": "vector",
+                "params": {
+                    "dimension": DIMENSION,
+                    "space_type": "cosine",
+                    "precision": "int8",
+                },
+            },
             {
                 "name": "chunks",
                 "type": "multi_vector",
                 "params": {
-                    "dimension": DIMENSION,
+                    "dimension": 8,
                     "space_type": "cosine",
                     "precision": "float16",
                     "pooling": "mean",
                 },
             },
         ]
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=fields_def,
-            force_recreate=True,
+        vs = EndeeVectorStore.from_params(
+            collection_name="multi_vector_coll", fields=fields
         )
-        chunk_vectors = [[0.1] * DIMENSION, [0.2] * DIMENSION, [0.3] * DIMENSION]
-        store.add_objects(
-            [
-                {
-                    "id": "mv1",
-                    "meta": {"text": "chunked doc"},
-                    "filter": {},
-                    "fields": {
-                        "dense": [0.5] * DIMENSION,
-                        "chunks": chunk_vectors,
-                    },
-                },
-            ]
-        )
-        stored = store.collection.get_objects(["mv1"])[0]
-        assert stored["fields"]["chunks"] == chunk_vectors
-        assert len(stored["fields"]["chunks"]) == 3
-        assert all(len(v) == DIMENSION for v in stored["fields"]["chunks"])
-
-    def test_multi_field_search_returns_per_field_results(
-        self, mock_endee_client, fake_embedder
-    ):
-        """multi_field_search must return results keyed by each searched field name."""
-        fields_def = [
+        chunks = [[0.1] * 8, [0.2] * 8, [0.3] * 8]
+        objects = [
             {
-                "name": "title",
-                "type": "vector",
-                "params": {
-                    "dimension": DIMENSION,
-                    "space_type": "cosine",
-                    "precision": "int8",
-                },
-            },
-            {
-                "name": "content",
-                "type": "vector",
-                "params": {
-                    "dimension": DIMENSION,
-                    "space_type": "cosine",
-                    "precision": "int8",
-                },
-            },
-        ]
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=fields_def,
-            dense_field_name="title",
-            force_recreate=True,
-        )
-        store.add_objects(
-            [
-                {
-                    "id": "m1",
-                    "meta": {"text": "t"},
-                    "filter": {},
-                    "fields": {
-                        "title": [1.0] * DIMENSION,
-                        "content": [0.5] * DIMENSION,
-                    },
-                },
-            ]
-        )
-        raw = store.multi_field_search(
-            fields={
-                "title": {"query": [1.0] * DIMENSION, "limit": 3},
-                "content": {"query": [0.5] * DIMENSION, "limit": 3},
+                "id": "obj1",
+                "meta": {},
+                "filter": {},
+                "fields": {"dense": [0.1, 0.2, 0.3, 0.4], "chunks": chunks},
             }
-        )
-        assert "title" in raw["results"]
-        assert "content" in raw["results"]
-
-    def test_multi_field_search_with_rerank_forwards_field_weights_and_rrf_k(
-        self, mock_endee_client, fake_embedder, monkeypatch
-    ):
-        """multi_field_search_with_rerank must forward field_weights, rrf_k, limit."""
-        fields_def = [
-            {
-                "name": "title",
-                "type": "vector",
-                "params": {
-                    "dimension": DIMENSION,
-                    "space_type": "cosine",
-                    "precision": "int8",
-                },
-            },
-            {
-                "name": "content",
-                "type": "vector",
-                "params": {
-                    "dimension": DIMENSION,
-                    "space_type": "cosine",
-                    "precision": "int8",
-                },
-            },
         ]
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=fields_def,
-            dense_field_name="title",
-            force_recreate=True,
-        )
-        store.add_objects(
-            [
-                {
-                    "id": "m1",
-                    "meta": {"text": "t"},
-                    "filter": {},
-                    "fields": {
-                        "title": [1.0] * DIMENSION,
-                        "content": [0.5] * DIMENSION,
-                    },
-                },
-            ]
-        )
 
-        captured = {}
+        ids = vs.add_objects(objects)
 
-        def fake_rerank(raw, **kwargs):
-            captured.update(kwargs)
-            return {"results": []}
+        assert ids == ["obj1"]
+        stored = vs._collection._store["obj1"]
+        assert stored["fields"]["dense"] == [0.1, 0.2, 0.3, 0.4]
+        assert stored["fields"]["chunks"] == chunks
+        assert len(stored["fields"]["chunks"]) == 3
+        assert all(len(v) == 8 for v in stored["fields"]["chunks"])
 
-        monkeypatch.setattr("langchain_endee.vectorstores.endee_rerank", fake_rerank)
+    # ── empty/None query embedding: fixed test_empty_query ──────────────────
 
-        store.multi_field_search_with_rerank(
-            fields={
-                "title": {"query": [1.0] * DIMENSION, "limit": 10},
-                "content": {"query": [0.5] * DIMENSION, "limit": 10},
-            },
-            limit=5,
-            field_weights={"title": 0.4, "content": 0.6},
-            rrf_k=42,
-        )
-        assert captured["field_weights"] == {"title": 0.4, "content": 0.6}
-        assert captured["rrf_k"] == 42
-        assert captured["limit"] == 5
-
-    def test_multi_field_search_with_rerank_omits_field_weights_when_not_given(
-        self, mock_endee_client, fake_embedder, monkeypatch
+    def test_query_with_none_embedding_returns_empty_result_not_raise(
+        self, mock_endee_client
     ):
-        """Without field_weights or rrf_k given, both fall back to their defaults."""
-        fields_def = [
-            {
-                "name": "title",
-                "type": "vector",
-                "params": {
-                    "dimension": DIMENSION,
-                    "space_type": "cosine",
-                    "precision": "int8",
-                },
-            },
+        """query() must catch a search failure and return an empty result, not raise."""
+        # search() is wrapped in a broad try/except, so any failure is caught.
+        collection = _mock_vector_store_collection()
+        collection.search.side_effect = ValueError("invalid embedding")
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
+        )
+        query = VectorStoreQuery(similarity_top_k=3)  # no embedding
+        assert query.query_embedding is None
+
+        result = vs.query(query)  # must NOT raise
+
+        assert result.nodes == []
+        assert result.similarities == []
+        assert result.ids == []
+
+    # ── Result conversion round-trip ────────────────────────────────────────
+
+    def test_query_result_round_trips_node_content_and_metadata(
+        self, mock_endee_client
+    ):
+        """_process_single_result() must reconstruct a node matching what was stored."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="roundtrip_coll", dimension=DIMENSION
+        )
+        node = TextNode(
+            text="round trip me",
+            embedding=[0.1, 0.2, 0.3, 0.4],
+            id_="rt1",
+            metadata={"category": "programming", "difficulty": "beginner"},
+        )
+        vs.add([node])
+
+        stored = vs._collection._store["rt1"]
+        reconstructed, score, node_id = vs._process_single_result(
+            {"id": "rt1", "similarity": 0.987, "meta": dict(stored["meta"])}
+        )
+
+        assert node_id == "rt1"
+        assert score == 0.987
+        assert reconstructed.text == "round trip me"
+        assert reconstructed.metadata.get("category") == "programming"
+        assert reconstructed.metadata.get("difficulty") == "beginner"
+
+    def test_process_query_results_skips_bad_result_and_keeps_good_ones(
+        self, mock_endee_client
+    ):
+        """_process_query_results() must skip a bad result but keep the good ones."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="skip_bad_coll", dimension=DIMENSION
+        )
+        node = TextNode(text="good node", embedding=[0.1, 0.2, 0.3, 0.4], id_="good")
+        vs.add([node])
+        good_meta = dict(vs._collection._store["good"]["meta"])
+
+        results = [
+            {"id": "bad", "similarity": 0.1, "meta": None},  # will raise inside
+            {"id": "good", "similarity": 0.9, "meta": good_meta},
         ]
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=fields_def,
-            dense_field_name="title",
-            force_recreate=True,
-        )
+        nodes, similarities, ids = vs._process_query_results(results)
 
-        captured = {}
+        assert ids == ["good"]
+        assert len(nodes) == 1
+        assert nodes[0].text == "good node"
 
-        def fake_rerank(raw, **kwargs):
-            captured.update(kwargs)
-            return {"results": []}
+    # ── constants.py fallback / override coverage (GAP per §4.5) ────────────
 
-        monkeypatch.setattr("langchain_endee.vectorstores.endee_rerank", fake_rerank)
+    def test_supported_filter_operators_contains_eq_and_in(self):
+        """SUPPORTED_FILTER_OPERATORS must contain exactly EQ and IN."""
+        from llama_index.core.vector_stores.types import FilterOperator
 
-        store.multi_field_search_with_rerank(
-            fields={"title": {"query": [1.0] * DIMENSION, "limit": 10}},
-        )
-        assert "field_weights" not in captured
-        assert captured["rrf_k"] == 60
-        assert captured["limit"] == 10
+        from llama_index_endee.constants import SUPPORTED_FILTER_OPERATORS
+
+        assert FilterOperator.EQ in SUPPORTED_FILTER_OPERATORS
+        assert FilterOperator.IN in SUPPORTED_FILTER_OPERATORS
+        assert len(SUPPORTED_FILTER_OPERATORS) == 2
+
+    def test_reverse_operator_map_maps_eq_and_in(self):
+        """REVERSE_OPERATOR_MAP must map EQ to '$eq' and IN to '$in'."""
+        from llama_index.core.vector_stores.types import FilterOperator
+
+        from llama_index_endee.constants import REVERSE_OPERATOR_MAP
+
+        assert REVERSE_OPERATOR_MAP[FilterOperator.EQ] == "$eq"
+        assert REVERSE_OPERATOR_MAP[FilterOperator.IN] == "$in"
+
+    def test_precision_enum_exercised_directly_has_expected_values(self):
+        """Precision (real SDK or fallback) must cover the values the wrapper needs."""
+        from llama_index_endee.constants import Precision
+
+        values = {p.value for p in Precision}
+        assert {"binary", "float16", "float32", "int16", "int8"} <= values
+
+    def test_max_key_bytes_and_max_value_bytes_exported_with_defaults(self):
+        """MAX_KEY_BYTES/MAX_VALUE_BYTES are re-exported with documented defaults."""
+        from llama_index_endee.constants import MAX_KEY_BYTES, MAX_VALUE_BYTES
+
+        assert MAX_KEY_BYTES == 128
+        assert MAX_VALUE_BYTES == 1024
+
+    def test_endee_pydantic_compat_importable(self):
+        """endee._pydantic_compat must export to_dict, field_validator, PYDANTIC_V2."""
+        from endee._pydantic_compat import PYDANTIC_V2, field_validator, to_dict
+
+        assert to_dict is not None
+        assert field_validator is not None
+        assert isinstance(PYDANTIC_V2, bool)
+
+    def test_constants_overridden_from_sdk_when_available(self):
+        """When endee.constants is importable, its override copies real SDK values."""
+        # Reload fresh so the values come from the override, not a cached import.
+        import importlib
+
+        import endee.constants as real_ec
+
+        import llama_index_endee.constants as loaded_constants
+
+        importlib.reload(loaded_constants)
+
+        for name in (
+            "DEFAULT_EF_SEARCH",
+            "DEFAULT_M",
+            "DEFAULT_EF_CON",
+            "MAX_VECTORS_PER_BATCH",
+            "MAX_DIMENSION_ALLOWED",
+            "MAX_EF_SEARCH_ALLOWED",
+            "MAX_TOP_K_ALLOWED",
+            "MAX_KEY_BYTES",
+            "MAX_VALUE_BYTES",
+            "SPARSE_MODE_TYPES_SUPPORTED",
+        ):
+            assert getattr(loaded_constants, name) == getattr(real_ec, name)
+
+    def test_precision_fallback_enum_when_sdk_too_old(self):
+        """With no SDK Precision, the fallback enum's members/values must be used."""
+        # Simulates an endee SDK version with no Precision of its own.
+        import endee.constants as real_ec
+
+        orig_find_spec = importlib.util.find_spec
+
+        def fake_find_spec(name, *a, **kw):
+            if name == "endee.constants":
+                return None
+            return orig_find_spec(name, *a, **kw)
+
+        had_precision = hasattr(real_ec, "Precision")
+        saved_precision = getattr(real_ec, "Precision", None)
+        if had_precision:
+            del real_ec.Precision
+
+        import llama_index_endee.constants as loaded_constants
+
+        constants_file = loaded_constants.__file__
+
+        importlib.util.find_spec = fake_find_spec
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "llama_index_endee_constants_fallback_test", constants_file
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        finally:
+            importlib.util.find_spec = orig_find_spec
+            if had_precision:
+                real_ec.Precision = saved_precision
+
+        names_values = {p.name: p.value for p in mod.Precision}
+        assert names_values == {
+            "BINARY2": "binary",
+            "FLOAT16": "float16",
+            "FLOAT32": "float32",
+            "INT16": "int16",
+            "INT8": "int8",
+        }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1210,150 +769,279 @@ class TestVectorStoreUnit:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _mock_filters_collection():
+    collection = MagicMock()
+    collection.fields = [
+        {
+            "name": "dense",
+            "type": "vector",
+            "params": {
+                "dimension": DIMENSION,
+                "space_type": "cosine",
+                "precision": "int8",
+            },
+        }
+    ]
+    collection.search.return_value = {"results": {"dense": []}}
+    return collection
+
+
 @pytest.mark.unit
 class TestFiltersUnit:
-    def _make_store(self, mock_endee_client, fake_embedder, suffix):
-        name = uid(suffix)
-        return EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[DENSE_FIELD],
-            force_recreate=True,
-        )
+    # ── _extract_filter_fields: allowlist promotion ─────────────────────────
 
-    # ── delete(filter=...) ────────────────────────────────────────────────
-
-    def test_delete_by_filter_forwards_filter_to_collection(
-        self, mock_endee_client, fake_embedder, monkeypatch
-    ):
-        """delete(filter=...) must forward the filter to collection.delete_by_filter."""
-        store = self._make_store(mock_endee_client, fake_embedder, "delfilterfwd")
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
-
-        captured = {}
-        original = store.collection.delete_by_filter
-
-        def spy(filter):  # noqa: A002
-            captured["filter"] = filter
-            return original(filter)
-
-        monkeypatch.setattr(store.collection, "delete_by_filter", spy)
-
-        expected_filter = [{"category": {"$eq": "programming"}}]
-        store.delete(filter=expected_filter)
-        assert captured["filter"] == expected_filter
-
-    def test_delete_by_filter_removes_only_matching(
-        self, mock_endee_client, fake_embedder
-    ):
-        """delete(filter=...) must remove matches only, leaving others untouched."""
-        store = self._make_store(mock_endee_client, fake_embedder, "delfiltermatch")
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
-        store.delete(filter=[{"category": {"$eq": "programming"}}])
-        remaining_ids = list(store.collection._store)
-        remaining_categories = {
-            store.collection._store[i]["filter"]["category"] for i in remaining_ids
+    def test_extract_filter_fields_promotes_only_allowlisted_keys(self):
+        """_extract_filter_fields must promote only allowlisted metadata keys."""
+        node = TextNode(text="hi", id_="n1")
+        metadata = {
+            "file_name": "a.txt",
+            "doc_id": "d1",
+            "category": "programming",
+            "difficulty": "beginner",
+            "language": "python",
+            "field": "ml",
+            "type": "vector",
+            "feature": "search",
+            "not_allowlisted": "should stay out of filter",
+            "another_random_key": 123,
         }
-        assert "programming" not in remaining_categories
-        assert len(remaining_ids) == 3
+        filter_data = EndeeVectorStore._extract_filter_fields(node, metadata)
 
-    # ── filter forwarding through similarity_search_by_object_with_score ──
+        for key in (
+            "file_name",
+            "doc_id",
+            "category",
+            "difficulty",
+            "language",
+            "field",
+            "type",
+            "feature",
+        ):
+            assert filter_data[key] == metadata[key]
 
-    def test_similarity_search_forwards_filter_to_search_kwargs(
-        self, mock_endee_client, fake_embedder, monkeypatch
+        assert "not_allowlisted" not in filter_data
+        assert "another_random_key" not in filter_data
+
+    def test_extract_filter_fields_promotes_ref_doc_id_from_node_attr(self):
+        """_extract_filter_fields promotes ref_doc_id from metadata if node has none."""
+        node = TextNode(text="hi", id_="n1")
+        node.relationships = {}
+        # Simulate the metadata fallback, since node.ref_doc_id needs relationships.
+        metadata = {"ref_doc_id": "parent_doc_1"}
+        filter_data = EndeeVectorStore._extract_filter_fields(node, metadata)
+        assert filter_data["ref_doc_id"] == "parent_doc_1"
+
+    def test_extract_filter_fields_non_allowlisted_key_stays_meta_only(self):
+        """A non-allowlisted metadata key stays in `meta` but not in the filter dict."""
+        node = TextNode(text="hi", id_="n1")
+        metadata = {"category": "ai", "internal_note": "do-not-filter-on-this"}
+        filter_data = EndeeVectorStore._extract_filter_fields(node, metadata)
+        assert "internal_note" not in filter_data
+        assert filter_data == {"category": "ai"}
+
+    def test_extract_filter_fields_promotes_ref_doc_id_from_node_relationship(self):
+        """_extract_filter_fields promotes ref_doc_id from the SOURCE relationship."""
+        node = TextNode(text="child", id_="child1")
+        node.relationships[NodeRelationship.SOURCE] = RelatedNodeInfo(
+            node_id="real_parent_doc"
+        )
+        assert node.ref_doc_id == "real_parent_doc"
+
+        metadata = {}
+        filter_data = EndeeVectorStore._extract_filter_fields(node, metadata)
+        assert filter_data["ref_doc_id"] == "real_parent_doc"
+
+    def test_extract_filter_fields_node_relationship_takes_precedence_over_metadata(
+        self,
     ):
-        """similarity_search must forward the filter argument to collection.search."""
-        store = self._make_store(mock_endee_client, fake_embedder, "searchfilterfwd")
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
+        """With both sources present, the relationship-derived ref_doc_id wins."""
+        node = TextNode(text="child", id_="child1")
+        node.relationships[NodeRelationship.SOURCE] = RelatedNodeInfo(
+            node_id="from_relationship"
+        )
+        metadata = {"ref_doc_id": "from_metadata"}
+        filter_data = EndeeVectorStore._extract_filter_fields(node, metadata)
+        assert filter_data["ref_doc_id"] == "from_relationship"
 
-        captured = {}
-        original = store.collection.search
-
-        def spy(**kwargs):
-            captured.update(kwargs)
-            return original(**kwargs)
-
-        monkeypatch.setattr(store.collection, "search", spy)
-
-        expected_filter = [{"category": {"$eq": "ai"}}]
-        store.similarity_search("learning", k=5, filter=expected_filter)
-        assert captured["filter"] == expected_filter
-
-    def test_similarity_search_omits_filter_key_when_not_given(
-        self, mock_endee_client, fake_embedder, monkeypatch
+    def test_extract_filter_fields_sets_literal_none_string_when_no_source_relationship(
+        self,
     ):
-        """similarity_search must omit the 'filter' kwarg when none is given."""
-        store = self._make_store(mock_endee_client, fake_embedder, "searchnofilter")
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
+        """With no SOURCE relationship, filter["ref_doc_id"] is the string "None"."""
+        # Note: node_to_metadata_dict() stringifies a missing ref_doc_id to
+        # the literal "None", which is truthy, so it wins over the real None.
+        from llama_index.core.vector_stores.utils import node_to_metadata_dict
 
-        captured = {}
-        original = store.collection.search
+        node = TextNode(text="no source relationship", id_="orphan1")
+        metadata = node_to_metadata_dict(node)
 
-        def spy(**kwargs):
-            captured.update(kwargs)
-            return original(**kwargs)
+        filter_data = EndeeVectorStore._extract_filter_fields(node, metadata)
 
-        monkeypatch.setattr(store.collection, "search", spy)
+        assert filter_data["ref_doc_id"] == "None"
 
-        store.similarity_search("learning", k=5)
-        assert "filter" not in captured
-
-    # ── Operator support ($eq, $in, multiple filters) ─────────────────────
-
-    def test_filter_eq(self, mock_endee_client, fake_embedder):
-        """The $eq operator must restrict results to docs matching the exact value."""
-        store = self._make_store(mock_endee_client, fake_embedder, "eq")
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
-        results = store.similarity_search(
-            "language", k=5, filter=[{"category": {"$eq": "programming"}}]
+    def test_extract_filter_fields_mixed_keys_all_present_in_meta_via_add(
+        self, mock_endee_client
+    ):
+        """Only allowlisted keys land in `filter`; every key lands in `meta`."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="mixed_keys_coll", dimension=DIMENSION
         )
-        assert len(results) > 0
-        for doc in results:
-            assert doc.metadata.get("category") == "programming"
-
-    def test_filter_in(self, mock_endee_client, fake_embedder):
-        """The $in operator must restrict results to docs whose value is in the list."""
-        store = self._make_store(mock_endee_client, fake_embedder, "in")
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
-        results = store.similarity_search(
-            "technology",
-            k=5,
-            filter=[{"difficulty": {"$in": ["beginner", "advanced"]}}],
+        node = TextNode(
+            text="mixed keys",
+            embedding=[0.1, 0.2, 0.3, 0.4],
+            id_="mixed1",
+            metadata={
+                "category": "ai",
+                "difficulty": "beginner",
+                "not_allowlisted": "stays-meta-only",
+            },
         )
-        assert len(results) > 0
-        for doc in results:
-            assert doc.metadata.get("difficulty") in ["beginner", "advanced"]
+        vs.add([node])
+        stored = vs._collection._store["mixed1"]
 
-    def test_filter_multiple_is_and_logic(self, mock_endee_client, fake_embedder):
-        """Multiple filter dicts in the list must combine with AND logic."""
-        store = self._make_store(mock_endee_client, fake_embedder, "multi")
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
-        results = store.similarity_search(
-            "learning",
-            k=5,
-            filter=[{"category": {"$eq": "ai"}}, {"difficulty": {"$eq": "advanced"}}],
+        assert stored["filter"]["category"] == "ai"
+        assert stored["filter"]["difficulty"] == "beginner"
+        assert "not_allowlisted" not in stored["filter"]
+        assert stored["meta"]["category"] == "ai"
+        assert stored["meta"]["difficulty"] == "beginner"
+        assert stored["meta"]["not_allowlisted"] == "stays-meta-only"
+
+    # ── _process_filters: EQ/IN supported, everything else raises ValueError ─
+
+    def _store(self):
+        return EndeeVectorStore(
+            endee_collection=_mock_filters_collection(),
+            collection_name="test",
+            dimension=DIMENSION,
         )
-        for doc in results:
-            assert doc.metadata.get("category") == "ai"
-            assert doc.metadata.get("difficulty") == "advanced"
 
-    def test_filter_no_match_returns_empty(self, mock_endee_client, fake_embedder):
-        """A filter matching no documents must return an empty result list."""
-        store = self._make_store(mock_endee_client, fake_embedder, "nomatch")
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
-        results = store.similarity_search(
-            "anything", k=5, filter=[{"category": {"$eq": "nonexistent"}}]
+    @staticmethod
+    def _query(filters=None):
+        """VectorStoreQuery with a fixed embedding, for _process_filters tests."""
+        return VectorStoreQuery(
+            query_embedding=[0.1, 0.2, 0.3, 0.4], similarity_top_k=2, filters=filters
         )
-        assert results == []
 
-    def test_unsupported_operator_raises(self, mock_endee_client, fake_embedder):
-        """An unsupported filter operator must raise ValueError."""
-        store = self._make_store(mock_endee_client, fake_embedder, "badop")
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
-        with pytest.raises(ValueError, match="does not support operator"):
-            store.similarity_search(
-                "language", k=5, filter=[{"category": {"$ne": "programming"}}]
-            )
+    def test_process_filters_eq_produces_dollar_eq(self):
+        """_process_filters translates an EQ MetadataFilter into a '$eq' filter dict."""
+        store = self._store()
+        filters = MetadataFilters(
+            filters=[
+                MetadataFilter(key="category", value="ai", operator=FilterOperator.EQ)
+            ]
+        )
+        result = store._process_filters(self._query(filters))
+        assert result == [{"category": {"$eq": "ai"}}]
+
+    def test_process_filters_in_produces_dollar_in(self):
+        """_process_filters translates an IN MetadataFilter into a '$in' filter dict."""
+        store = self._store()
+        filters = MetadataFilters(
+            filters=[
+                MetadataFilter(
+                    key="language",
+                    value=["python", "javascript"],
+                    operator=FilterOperator.IN,
+                )
+            ]
+        )
+        result = store._process_filters(self._query(filters))
+        assert result == [{"language": {"$in": ["python", "javascript"]}}]
+
+    def test_process_filters_none_when_no_filters(self):
+        """_process_filters must return None when the query has no filters."""
+        store = self._store()
+        assert store._process_filters(self._query()) is None
+
+    def test_process_filters_ne_raises_value_error(self):
+        """_process_filters must raise ValueError for the unsupported NE operator."""
+        store = self._store()
+        filters = MetadataFilters(
+            filters=[
+                MetadataFilter(
+                    key="difficulty", value="beginner", operator=FilterOperator.NE
+                )
+            ]
+        )
+        with pytest.raises(ValueError, match="Unsupported filter operator"):
+            store._process_filters(self._query(filters))
+
+    def test_process_filters_multiple_eq_filters_merge(self):
+        """_process_filters merges multiple EQ filters into separate result entries."""
+        store = self._store()
+        filters = MetadataFilters(
+            filters=[
+                MetadataFilter(
+                    key="category", value="programming", operator=FilterOperator.EQ
+                ),
+                MetadataFilter(
+                    key="difficulty", value="beginner", operator=FilterOperator.EQ
+                ),
+            ]
+        )
+        result = store._process_filters(self._query(filters))
+        assert {"category": {"$eq": "programming"}} in result
+        assert {"difficulty": {"$eq": "beginner"}} in result
+
+    def test_process_filters_raises_on_unsupported_operator_among_supported_ones(self):
+        """_process_filters raises if any item uses an unsupported operator."""
+        store = self._store()
+        filters = MetadataFilters(
+            filters=[
+                MetadataFilter(key="category", value="ai", operator=FilterOperator.EQ),
+                MetadataFilter(
+                    key="difficulty", value="beginner", operator=FilterOperator.NE
+                ),
+            ]
+        )
+        with pytest.raises(ValueError, match="Unsupported filter operator"):
+            store._process_filters(self._query(filters))
+
+    def test_process_filters_raises_when_unsupported_operator_is_first(self):
+        """_process_filters raises on the first bad operator, not just at the end."""
+        store = self._store()
+        filters = MetadataFilters(
+            filters=[
+                MetadataFilter(
+                    key="difficulty", value="beginner", operator=FilterOperator.NE
+                ),
+                MetadataFilter(key="category", value="ai", operator=FilterOperator.EQ),
+            ]
+        )
+        with pytest.raises(ValueError, match="Unsupported filter operator"):
+            store._process_filters(self._query(filters))
+
+    @staticmethod
+    def _force_raw_filters(filters, raw_items):
+        """Bypasses MetadataFilters' validation to inject a raw dict item."""
+        object.__setattr__(filters, "filters", raw_items)
+        return filters
+
+    def test_process_filters_handles_raw_dict_filter_items(self):
+        """_process_filters builds the same shape when filters holds raw dicts."""
+        store = self._store()
+        filters = MetadataFilters(
+            filters=[MetadataFilter(key="x", value=1, operator=FilterOperator.EQ)]
+        )
+        self._force_raw_filters(filters, [{"category": {"$eq": "ai"}}])
+        result = store._process_filters(self._query(filters))
+        assert result == [{"category": {"$eq": "ai"}}]
+
+    def test_process_filters_mixes_metadata_filter_and_raw_dict_items(self):
+        """_process_filters merges a MetadataFilter and a raw dict into one result."""
+        store = self._store()
+        filters = MetadataFilters(
+            filters=[MetadataFilter(key="x", value=1, operator=FilterOperator.EQ)]
+        )
+        self._force_raw_filters(
+            filters,
+            [
+                MetadataFilter(key="category", value="ai", operator=FilterOperator.EQ),
+                {"language": {"$in": ["python", "rust"]}},
+            ],
+        )
+        result = store._process_filters(self._query(filters))
+        assert {"category": {"$eq": "ai"}} in result
+        assert {"language": {"$in": ["python", "rust"]}} in result
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1361,293 +1049,395 @@ class TestFiltersUnit:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class FakeSparseModel:
-    """Stand-in for `endee_model.SparseModel`."""
+class _FakeSparseEmbeddings(SparseEmbeddings):
+    """A trivial deterministic sparse embedder for tests."""
 
-    def __init__(
-        self,
-        model_name=None,
-        cache_dir=None,
-        k=1.2,
-        b=0.75,
-        avg_len=256.0,
-        language="english",
-        **kwargs,
-    ):
-        self.model_name = model_name
+    def embed_documents(self, texts):
+        return [
+            SparseVector(indices=[i % 5 for i in range(len(t))], values=[1.0] * len(t))
+            for t in texts
+        ]
 
-    def embed(self, texts):
-        for t in texts:
-            indices = sorted(set(hash(w) % 1000 for w in t.split()[:10]))
-            values = [1.0 / (i + 1) for i in range(len(indices))]
-            yield make_fake_sparse_result(indices, values)
+    def embed_query(self, text):
+        return SparseVector(
+            indices=list(range(len(text) % 5)), values=[1.0] * (len(text) % 5)
+        )
 
-    def query_embed(self, text):
-        yield from self.embed([text])
+
+def _mock_sparse_collection(fields=None):
+    collection = MagicMock()
+    collection.fields = fields or [
+        {
+            "name": "dense",
+            "type": "vector",
+            "params": {
+                "dimension": DIMENSION,
+                "space_type": "cosine",
+                "precision": "int8",
+            },
+        }
+    ]
+    collection.search.return_value = {"results": {"dense": []}}
+    return collection
+
+
+def _hybrid_fields(sparse_model="endee_bm25"):
+    """Dense+sparse field list shared by the hybrid-wiring tests below."""
+    return [
+        {
+            "name": "dense",
+            "type": "vector",
+            "params": {
+                "dimension": DIMENSION,
+                "space_type": "cosine",
+                "precision": "int8",
+            },
+        },
+        {"name": "sparse", "type": "sparse", "sparse_model": sparse_model},
+    ]
 
 
 @pytest.mark.unit
 class TestSparseUnit:
-    # ── Fixture ──────────────────────────────────────────────────────────
+    # ── SparseVector / SparseModelAdapter / wrap_sparse_model ───────────────
 
-    @pytest.fixture
-    def fake_endee_model_module(self, monkeypatch):
-        """Patch sys.modules for endee_model with a fake; no real package needed."""
-        fake_module = types.ModuleType("endee_model")
-        fake_module.SparseModel = FakeSparseModel
-        monkeypatch.setitem(sys.modules, "endee_model", fake_module)
-        return fake_module
-
-    # ── SparseVector ──────────────────────────────────────────────────────
-
-    def test_sparse_vector_valid_construction(self):
-        """SparseVector must store the given indices and values unchanged."""
-        sv = SparseVector(indices=[1, 5, 9], values=[0.1, 0.2, 0.3])
-        assert sv.indices == [1, 5, 9]
+    def test_sparse_vector_holds_indices_and_values(self):
+        """SparseVector must store its indices and values as given."""
+        sv = SparseVector(indices=[1, 3, 5], values=[0.1, 0.2, 0.3])
+        assert sv.indices == [1, 3, 5]
         assert sv.values == [0.1, 0.2, 0.3]
 
-    def test_sparse_vector_rejects_extra_fields(self):
-        """SparseVector must raise ValidationError for an unexpected extra field."""
-        with pytest.raises(ValidationError):
-            SparseVector(indices=[1], values=[0.1], extra_field="nope")
-
-    def test_sparse_vector_requires_indices_and_values(self):
-        """SparseVector must raise ValidationError when values is missing."""
-        with pytest.raises(ValidationError):
-            SparseVector(indices=[1, 2])
-
-    # ── SparseModelAdapter ────────────────────────────────────────────────
-
-    def test_sparse_model_adapter_embed_documents(self):
-        """embed_documents returns one SparseVector per text with matched lengths."""
-        adapter = SparseModelAdapter(FakeRawSparseModel())
-        vecs = adapter.embed_documents(["python programming", "rust systems"])
-        assert len(vecs) == 2
-        for v in vecs:
-            assert isinstance(v, SparseVector)
-            assert len(v.indices) == len(v.values)
-
-    def test_sparse_model_adapter_embed_query(self):
-        """SparseModelAdapter.embed_query must return a single SparseVector."""
-        adapter = SparseModelAdapter(FakeRawSparseModel())
-        vec = adapter.embed_query("python")
-        assert isinstance(vec, SparseVector)
-
-    # ── wrap_sparse_model ─────────────────────────────────────────────────
-
-    def test_wrap_sparse_model_passes_through_sparse_embeddings(
-        self, fake_sparse_embedding
-    ):
+    def test_wrap_sparse_model_returns_sparse_embeddings_as_is(self):
         """wrap_sparse_model must return a SparseEmbeddings instance unchanged."""
-        wrapped = wrap_sparse_model(fake_sparse_embedding)
-        assert wrapped is fake_sparse_embedding
+        fake = _FakeSparseEmbeddings()
+        assert wrap_sparse_model(fake) is fake
 
-    def test_wrap_sparse_model_wraps_raw_model(self):
-        """wrap_sparse_model must wrap a raw sparse model in a SparseModelAdapter."""
-        raw = FakeRawSparseModel()
-        wrapped = wrap_sparse_model(raw)
+    def test_wrap_sparse_model_wraps_embed_query_embed_object(self):
+        """wrap_sparse_model wraps a third-party embed()/query_embed() in an adapter."""
+
+        class _ThirdPartyModel:
+            def embed(self, texts):
+                for _ in texts:
+                    m = MagicMock()
+                    m.indices.tolist.return_value = [1, 2]
+                    m.values.tolist.return_value = [0.5, 0.5]
+                    yield m
+
+            def query_embed(self, text):
+                m = MagicMock()
+                m.indices.tolist.return_value = [1]
+                m.values.tolist.return_value = [1.0]
+                yield m
+
+        wrapped = wrap_sparse_model(_ThirdPartyModel())
         assert isinstance(wrapped, SparseModelAdapter)
+        docs = wrapped.embed_documents(["a", "b"])
+        assert len(docs) == 2
+        assert docs[0].indices == [1, 2]
 
-    def test_wrap_sparse_model_rejects_invalid_object(self):
-        """wrap_sparse_model rejects objects that are neither model nor embeddings."""
+        q = wrapped.embed_query("hi")
+        assert q.indices == [1]
+
+    def test_wrap_sparse_model_rejects_incompatible_object(self):
+        """wrap_sparse_model raises TypeError for an incompatible object."""
         with pytest.raises(TypeError):
             wrap_sparse_model(object())
 
-    # ── EndeeModelSparse ──────────────────────────────────────────────────
+    def test_endee_model_sparse_raises_if_package_missing(self):
+        """EndeeModelSparse raises ImportError if the endee_model package is missing."""
+        from llama_index_endee.sparse_embeddings import EndeeModelSparse
 
-    def test_endee_model_sparse_raises_without_package(self, monkeypatch):
-        """EndeeModelSparse must raise ImportError when endee_model is unavailable."""
-        monkeypatch.setitem(sys.modules, "endee_model", None)
-        with pytest.raises(ImportError):
-            EndeeModelSparse()
+        with patch.dict("sys.modules", {"endee_model": None}):
+            with pytest.raises(ImportError, match="endee_model"):
+                EndeeModelSparse()
 
-    def test_endee_model_sparse_embed_documents(self, fake_endee_model_module):
-        """embed_documents must return one SparseVector per input text."""
-        model = EndeeModelSparse()
-        vecs = model.embed_documents(["python programming", "rust systems"])
-        assert len(vecs) == 2
-        for v in vecs:
-            assert isinstance(v, SparseVector)
+    def test_endee_model_sparse_wraps_bm25(self):
+        """EndeeModelSparse wraps BM25's embed() output into SparseVectors."""
+        from llama_index_endee.sparse_embeddings import EndeeModelSparse
 
-    def test_endee_model_sparse_embed_query(self, fake_endee_model_module):
-        """EndeeModelSparse.embed_query must return a SparseVector."""
-        model = EndeeModelSparse()
-        vec = model.embed_query("python")
-        assert isinstance(vec, SparseVector)
+        fake_sparse_model_cls = MagicMock()
+        fake_instance = MagicMock()
 
-    # ── Hybrid / retrieval-mode auto-detection ───────────────────────────
+        def fake_embed(texts):
+            for _ in texts:
+                m = MagicMock()
+                m.indices.tolist.return_value = [0, 1]
+                m.values.tolist.return_value = [1.0, 2.0]
+                yield m
 
-    def test_endee_bm25_field_auto_switches_to_hybrid(
-        self, mock_endee_client, fake_embedder, fake_endee_model_module
+        fake_instance.embed.side_effect = fake_embed
+        fake_sparse_model_cls.return_value = fake_instance
+
+        fake_module = MagicMock()
+        fake_module.SparseModel = fake_sparse_model_cls
+        with patch.dict("sys.modules", {"endee_model": fake_module}):
+            model = EndeeModelSparse()
+            docs = model.embed_documents(["hello world"])
+            assert docs[0].indices == [0, 1]
+            assert docs[0].values == [1.0, 2.0]
+
+    # ── Hybrid auto-detection wiring in EndeeVectorStore ────────────────────
+
+    def test_hybrid_auto_detected_from_endee_bm25_field(self, mock_endee_client):
+        """sparse_model='endee_bm25' with no embedding auto-creates one, sets hybrid."""
+        with patch(
+            "llama_index_endee.sparse_embeddings.EndeeModelSparse"
+        ) as mock_sparse_cls:
+            mock_sparse_cls.return_value = _FakeSparseEmbeddings()
+
+            vs = EndeeVectorStore.from_params(
+                collection_name="hybrid_coll",
+                fields=_hybrid_fields(),
+            )
+            assert vs.hybrid is True
+            mock_sparse_cls.assert_called_once()
+
+    def test_hybrid_not_auto_created_when_sparse_embedding_provided(
+        self, mock_endee_client
     ):
-        """A sparse_model='endee_bm25' field auto-switches retrieval_mode to HYBRID."""
-        # It must also configure sparse_embeddings as an EndeeModelSparse instance.
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "endee_bm25"},
-            ],
-            force_recreate=True,
-        )
-        assert store.retrieval_mode == RetrievalMode.HYBRID
-        assert isinstance(store.sparse_embeddings, EndeeModelSparse)
+        """Supplying sparse_embedding skips auto-creating EndeeModelSparse."""
+        provided = _FakeSparseEmbeddings()
+        with patch(
+            "llama_index_endee.sparse_embeddings.EndeeModelSparse"
+        ) as mock_sparse_cls:
+            vs = EndeeVectorStore.from_params(
+                collection_name="hybrid_coll2",
+                fields=_hybrid_fields(),
+                sparse_embedding=provided,
+            )
+            assert vs.hybrid is True
+            # Auto-create path must be skipped since a sparse_embedding
+            # was already supplied.
+            mock_sparse_cls.assert_not_called()
+            assert vs._sparse_embeddings is provided
 
-    def test_raw_sparse_model_is_auto_wrapped(self, mock_endee_client, fake_embedder):
-        """A raw sparse model as sparse_embedding auto-wraps in SparseModelAdapter."""
-        name = uid()
-        raw_model = FakeRawSparseModel()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "default"},
-            ],
-            retrieval_mode=RetrievalMode.HYBRID,
-            sparse_embedding=raw_model,
-            force_recreate=True,
+    def test_dense_only_collection_is_not_hybrid(self, mock_endee_client):
+        """A dense-only collection must report hybrid=False."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="dense_coll", dimension=DIMENSION
         )
-        assert isinstance(store.sparse_embeddings, SparseModelAdapter)
+        assert vs.hybrid is False
 
-    def test_from_existing_endee_bm25_auto_reconnect(
-        self, mock_endee_client, fake_embedder, fake_endee_model_module
+    def test_default_sparse_model_with_explicit_embedding_skips_auto_create(
+        self, mock_endee_client
     ):
-        """Reconnecting to an endee_bm25 sparse field must auto-detect HYBRID mode."""
-        name = uid()
-        EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "endee_bm25"},
-            ],
-            force_recreate=True,
-        )
-        store2 = EndeeVectorStore.from_existing_collection(
-            collection_name=name,
-            embedding=fake_embedder,
-        )
-        assert store2.retrieval_mode == RetrievalMode.HYBRID
+        """sparse_model='default' with an explicit embedding skips auto-create."""
+        custom_sparse = _FakeSparseEmbeddings()
+        with patch(
+            "llama_index_endee.sparse_embeddings.EndeeModelSparse"
+        ) as mock_sparse_cls:
+            vs = EndeeVectorStore.from_params(
+                collection_name="default_sparse_coll",
+                fields=_hybrid_fields(sparse_model="default"),
+                sparse_embedding=custom_sparse,
+            )
+            mock_sparse_cls.assert_not_called()
+            assert vs._sparse_embeddings is custom_sparse
+            assert vs.hybrid is True
+            assert vs._collection.fields[1]["sparse_model"] == "default"
 
-    def test_hybrid_search_by_object_with_score(
-        self, mock_endee_client, fake_embedder, fake_sparse_embedding
+    def test_default_sparse_model_without_embedding_stays_non_hybrid(
+        self, mock_endee_client
     ):
-        """Hybrid by-object search with score must run RRF fusion without raising."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            fields=[
-                DENSE_FIELD,
-                {"name": "sparse", "type": "sparse", "sparse_model": "default"},
-            ],
-            retrieval_mode=RetrievalMode.HYBRID,
-            sparse_embedding=fake_sparse_embedding,
-            force_recreate=True,
-        )
-        store.add_texts(texts=TEXTS, metadatas=METADATAS)
-        dense_vec = fake_embedder.embed_query("deep learning")
-        sparse_vec = fake_sparse_embedding.embed_query("deep learning")
-        results = store.similarity_search_by_object_with_score(
-            embedding=dense_vec,
-            k=3,
-            sparse_indices=sparse_vec.indices,
-            sparse_values=sparse_vec.values,
-        )
-        # The fake backend returns no sparse hits, but fusion must still return a list.
-        assert isinstance(results, list)
+        """sparse_model='default' with no embedding stays non-hybrid unlike bm25."""
+        with patch(
+            "llama_index_endee.sparse_embeddings.EndeeModelSparse"
+        ) as mock_sparse_cls:
+            vs = EndeeVectorStore.from_params(
+                collection_name="default_sparse_noembed_coll",
+                fields=_hybrid_fields(sparse_model="default"),
+            )
+            mock_sparse_cls.assert_not_called()
+            assert vs._sparse_embeddings is None
+            assert vs.hybrid is False
 
-    # ── _detect_sparse_model / simple-mode (dimension=) collection creation ─
+    def test_add_computes_sparse_vectors_when_hybrid(self, mock_endee_client):
+        """add() on a hybrid store computes and stores sparse indices/values too."""
+        fake_sparse = _FakeSparseEmbeddings()
+        vs = EndeeVectorStore.from_params(
+            collection_name="hybrid_add_coll",
+            fields=_hybrid_fields(),
+            sparse_embedding=fake_sparse,
+        )
+        node = TextNode(text="hello", embedding=[0.1, 0.2, 0.3, 0.4], id_="h1")
+        vs.add([node])
+        stored = vs._collection._store["h1"]
+        assert "sparse" in stored["fields"]
+        assert "indices" in stored["fields"]["sparse"]
+        assert "values" in stored["fields"]["sparse"]
 
-    def test_simple_mode_creation_with_sparse_embedding_uses_default_sparse_model(
-        self, mock_endee_client, fake_embedder, fake_sparse_embedding
+    def _hybrid_store_with_node(self, collection_name):
+        """Builds a dense+endee_bm25 hybrid store with one indexed node."""
+        vs = EndeeVectorStore.from_params(
+            collection_name=collection_name,
+            fields=_hybrid_fields(),
+            sparse_embedding=_FakeSparseEmbeddings(),
+        )
+        node = TextNode(text="hello world", embedding=[0.1, 0.2, 0.3, 0.4], id_="h1")
+        vs.add([node])
+        return vs
+
+    def test_query_fuses_multi_field_results_with_rerank(self, mock_endee_client):
+        """query() on a hybrid store calls endee_rerank with dense+sparse results."""
+        vs = self._hybrid_store_with_node("rerank_coll")
+
+        with patch("llama_index_endee.base.endee_rerank") as mock_rerank:
+            mock_rerank.return_value = {"results": []}
+            query = VectorStoreQuery(
+                query_embedding=[0.1, 0.2, 0.3, 0.4],
+                query_str="hello world",
+                similarity_top_k=3,
+            )
+            vs.query(query)
+            mock_rerank.assert_called_once()
+            call_args = mock_rerank.call_args[0][0]
+            assert "dense" in call_args["results"]
+            assert "sparse" in call_args["results"]
+
+    def test_single_field_query_skips_rerank(self, mock_endee_client):
+        """With only the dense field searched, endee_rerank must not be invoked."""
+        vs = EndeeVectorStore.from_params(
+            collection_name="no_rerank_coll", dimension=DIMENSION
+        )
+        node = TextNode(text="hello", embedding=[0.1, 0.2, 0.3, 0.4], id_="h1")
+        vs.add([node])
+
+        with patch("llama_index_endee.base.endee_rerank") as mock_rerank:
+            query = VectorStoreQuery(
+                query_embedding=[0.1, 0.2, 0.3, 0.4], similarity_top_k=3
+            )
+            vs.query(query)
+            mock_rerank.assert_not_called()
+
+    def test_query_with_zero_result_fields_returns_empty_not_error(
+        self, mock_endee_client
     ):
-        """Simple-mode with a plain sparse_embedding creates a 'default' sparse."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            dimension=DIMENSION,
-            retrieval_mode=RetrievalMode.HYBRID,
-            sparse_embedding=fake_sparse_embedding,
-            force_recreate=True,
+        """query() returns empty and skips rerank when the collection has no results."""
+        # Falls through to the empty results=[] branch rather than reranking.
+        collection = _mock_sparse_collection()
+        collection.search.return_value = {"results": {}}
+        vs = EndeeVectorStore(
+            endee_collection=collection, collection_name="test", dimension=DIMENSION
         )
-        fm = store.field_map
-        assert fm["sparse"]["type"] == "sparse"
-        assert fm["sparse"]["sparse_model"] == "default"
+        with patch("llama_index_endee.base.endee_rerank") as mock_rerank:
+            query = VectorStoreQuery(
+                query_embedding=[0.1, 0.2, 0.3, 0.4], similarity_top_k=3
+            )
+            result = vs.query(query)
+            mock_rerank.assert_not_called()
+        assert result.nodes == []
+        assert result.similarities == []
+        assert result.ids == []
 
-    def test_simple_mode_creation_with_endee_model_sparse_uses_endee_bm25(
-        self, mock_endee_client, fake_embedder, fake_endee_model_module
+    def test_dense_rrf_weight_forwarded_as_field_weights_when_multi_field(
+        self, mock_endee_client
     ):
-        """An EndeeModelSparse embedding in simple mode creates an endee_bm25 field."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            dimension=DIMENSION,
-            retrieval_mode=RetrievalMode.HYBRID,
-            sparse_embedding=EndeeModelSparse(),
-            force_recreate=True,
-        )
-        fm = store.field_map
-        assert fm["sparse"]["type"] == "sparse"
-        assert fm["sparse"]["sparse_model"] == "endee_bm25"
+        """query() forwards dense_rrf_weight into rerank_kwargs as per-field weights."""
+        # dense gets the weight, sparse gets 1 - weight.
+        vs = self._hybrid_store_with_node("rrf_weight_coll")
 
-    def test_simple_mode_creation_without_sparse_embedding_has_no_sparse_field(
-        self, mock_endee_client, fake_embedder
+        with patch("llama_index_endee.base.endee_rerank") as mock_rerank:
+            mock_rerank.return_value = {"results": []}
+            query = VectorStoreQuery(
+                query_embedding=[0.1, 0.2, 0.3, 0.4],
+                query_str="hello world",
+                similarity_top_k=3,
+            )
+            vs.query(query, dense_rrf_weight=0.7)
+            rerank_kwargs = mock_rerank.call_args[1]
+            assert rerank_kwargs["field_weights"]["dense"] == 0.7
+            assert rerank_kwargs["field_weights"]["sparse"] == pytest.approx(0.3)
+
+    def test_rrf_rank_constant_forwarded_as_rrf_k_when_multi_field(
+        self, mock_endee_client
     ):
-        """Simple-mode without a sparse_embedding must create no sparse field."""
-        name = uid()
-        store = EndeeVectorStore(
-            embedding=fake_embedder,
-            collection_name=name,
-            dimension=DIMENSION,
-            force_recreate=True,
-        )
-        fm = store.field_map
-        assert "sparse" not in fm
+        """query() forwards rrf_rank_constant as `rrf_k` in rerank_kwargs."""
+        vs = self._hybrid_store_with_node("rrf_k_coll")
 
-    # ── Async delegation (aembed_documents / aembed_query) ────────────────
+        with patch("llama_index_endee.base.endee_rerank") as mock_rerank:
+            mock_rerank.return_value = {"results": []}
+            query = VectorStoreQuery(
+                query_embedding=[0.1, 0.2, 0.3, 0.4],
+                query_str="hello world",
+                similarity_top_k=3,
+            )
+            vs.query(query, rrf_rank_constant=30)
+            rerank_kwargs = mock_rerank.call_args[1]
+            assert rerank_kwargs["rrf_k"] == 30
 
-    @pytest.mark.asyncio
-    async def test_aembed_documents_delegates_to_sync(self, fake_sparse_embedding):
-        """aembed_documents must match the sync embed_documents SparseVectors."""
-        texts = ["python programming", "rust systems", "machine learning"]
-        expected = fake_sparse_embedding.embed_documents(texts)
-        actual = await fake_sparse_embedding.aembed_documents(texts)
-        assert len(actual) == len(expected)
-        for a, e in zip(actual, expected):
-            assert a.indices == e.indices
-            assert a.values == e.values
+    def test_dense_rrf_weight_and_rrf_rank_constant_omitted_when_none(
+        self, mock_endee_client
+    ):
+        """With both rrf params left None, rerank_kwargs must contain only `limit`."""
+        vs = self._hybrid_store_with_node("rrf_none_coll")
 
-    @pytest.mark.asyncio
-    async def test_aembed_query_delegates_to_sync(self, fake_sparse_embedding):
-        """aembed_query must return the same SparseVector as sync embed_query."""
-        expected = fake_sparse_embedding.embed_query("python programming")
-        actual = await fake_sparse_embedding.aembed_query("python programming")
-        assert actual.indices == expected.indices
-        assert actual.values == expected.values
+        with patch("llama_index_endee.base.endee_rerank") as mock_rerank:
+            mock_rerank.return_value = {"results": []}
+            query = VectorStoreQuery(
+                query_embedding=[0.1, 0.2, 0.3, 0.4],
+                query_str="hello world",
+                similarity_top_k=3,
+            )
+            vs.query(query)
+            rerank_kwargs = mock_rerank.call_args[1]
+            assert rerank_kwargs == {"limit": 3}
 
-    @pytest.mark.asyncio
-    async def test_aembed_documents_uses_run_in_executor(self):
-        """The default aembed_documents delegates once to sync embed_documents."""
-        # One call with the full batch, not one call per text - proves it
-        # goes through run_in_executor rather than looping and awaiting per item.
-        calls = []
+    def test_dense_rrf_weight_via_query_kwargs(self, mock_endee_client):
+        """query() reads dense_rrf_weight from query_kwargs, like threshold params."""
+        vs = self._hybrid_store_with_node("rrf_qkwargs_coll")
 
-        class TrackedSparse(SparseEmbeddings):
-            def embed_documents(self, texts):
-                calls.append(("embed_documents", texts))
-                return [SparseVector(indices=[0], values=[1.0]) for _ in texts]
+        with patch("llama_index_endee.base.endee_rerank") as mock_rerank:
+            mock_rerank.return_value = {"results": []}
+            query = VectorStoreQuery(
+                query_embedding=[0.1, 0.2, 0.3, 0.4],
+                query_str="hello world",
+                similarity_top_k=3,
+            )
+            object.__setattr__(query, "query_kwargs", {"dense_rrf_weight": 0.9})
+            vs.query(query)
+            rerank_kwargs = mock_rerank.call_args[1]
+            assert rerank_kwargs["field_weights"] == {
+                "dense": 0.9,
+                "sparse": pytest.approx(0.1),
+            }
 
-            def embed_query(self, text):
-                calls.append(("embed_query", text))
-                return SparseVector(indices=[0], values=[1.0])
+    def test_rrf_rank_constant_via_query_kwargs(self, mock_endee_client):
+        """query() reads rrf_rank_constant from query.query_kwargs."""
+        vs = self._hybrid_store_with_node("rrf_k_qkwargs_coll")
 
-        instance = TrackedSparse()
-        result = await instance.aembed_documents(["a", "b"])
-        assert len(result) == 2
-        assert calls == [("embed_documents", ["a", "b"])]
+        with patch("llama_index_endee.base.endee_rerank") as mock_rerank:
+            mock_rerank.return_value = {"results": []}
+            query = VectorStoreQuery(
+                query_embedding=[0.1, 0.2, 0.3, 0.4],
+                query_str="hello world",
+                similarity_top_k=3,
+            )
+            object.__setattr__(query, "query_kwargs", {"rrf_rank_constant": 100})
+            vs.query(query)
+            rerank_kwargs = mock_rerank.call_args[1]
+            assert rerank_kwargs["rrf_k"] == 100
+
+    def test_explicit_dense_rrf_weight_takes_precedence_over_query_kwargs(
+        self, mock_endee_client
+    ):
+        """An explicit dense_rrf_weight kwarg wins over the query_kwargs value."""
+        vs = self._hybrid_store_with_node("rrf_precedence_coll")
+
+        with patch("llama_index_endee.base.endee_rerank") as mock_rerank:
+            mock_rerank.return_value = {"results": []}
+            query = VectorStoreQuery(
+                query_embedding=[0.1, 0.2, 0.3, 0.4],
+                query_str="hello world",
+                similarity_top_k=3,
+            )
+            object.__setattr__(query, "query_kwargs", {"dense_rrf_weight": 0.2})
+            vs.query(query, dense_rrf_weight=0.6)
+            rerank_kwargs = mock_rerank.call_args[1]
+            assert rerank_kwargs["field_weights"]["dense"] == 0.6
+
+    def test_sparse_mode_types_supported_contains_default_and_endee_bm25(self):
+        """SPARSE_MODE_TYPES_SUPPORTED must be exactly 'default' and 'endee_bm25'."""
+        from llama_index_endee.constants import SPARSE_MODE_TYPES_SUPPORTED
+
+        assert isinstance(SPARSE_MODE_TYPES_SUPPORTED, list)
+        assert set(SPARSE_MODE_TYPES_SUPPORTED) == {"default", "endee_bm25"}
